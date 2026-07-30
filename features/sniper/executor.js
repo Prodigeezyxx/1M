@@ -30,7 +30,14 @@ function getRateCount(chain) {
   return recent.length
 }
 
-function executeBuy(chain, walletAddress, tokenAddress, log) {
+function toRawAmount(chain, amountStr) {
+  const num = parseFloat(amountStr)
+  if (isNaN(num) || num <= 0) return '0'
+  const decimals = chain === 'sol' ? 1e9 : 1e18
+  return String(Math.floor(num * decimals))
+}
+
+function executeBuy(chain, walletAddress, tokenAddress, log, amountOverride) {
   const cfg = CONFIG[chain]
   const isSol = chain === 'sol'
 
@@ -40,18 +47,19 @@ function executeBuy(chain, walletAddress, tokenAddress, log) {
     return null
   }
 
-  const amount = cfg.buyAmount
+  const userAmount = amountOverride || cfg.buyAmount
+  const rawAmount = toRawAmount(chain, userAmount)
   const inputToken = cfg.currency
   const outputToken = tokenAddress
-  const currencyLabel = isSol ? 'SOL' : 'WETH'
+  const currencyLabel = isSol ? 'SOL' : 'ETH'
 
-  log(`  [BUY] ${tokenAddress.slice(0, 10)}..  ${amount} ${currencyLabel}  via ${walletAddress.slice(0, 6)}...`)
+  log(`  [BUY] ${tokenAddress.slice(0, 10)}..  ${userAmount} ${currencyLabel}  via ${walletAddress.slice(0, 6)}...`)
 
   try {
-    const result = gmgnSwap(chain, walletAddress, inputToken, outputToken, amount)
+    const result = gmgnSwap(chain, walletAddress, inputToken, outputToken, rawAmount)
     recordTimestamp(chain)
-    log(`  [BOUGHT] ${tokenAddress.slice(0, 10)}..  ${amount} ${currencyLabel}`)
-    return { success: true, token: tokenAddress, amount, result }
+    log(`  [BOUGHT] ${tokenAddress.slice(0, 10)}..  ${userAmount} ${currencyLabel}`)
+    return { success: true, token: tokenAddress, amount: userAmount, result }
   } catch (err) {
     log(`  [FAIL] ${tokenAddress.slice(0, 10)}.. — ${err.message.slice(0, 80)}`)
     return { success: false, token: tokenAddress, error: err.message }

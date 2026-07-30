@@ -336,7 +336,7 @@ async function renderSniper() {
   l.push(tRow('CONTROLS (keyboard)'))
   l.push(`\u2551  <span class="cyan">[1] Start ${c}</span>   <span class="cyan">[5] Stop</span>          <span class="cyan">[7] SellAll</span>              \u2551`)
   l.push(`\u2551  <span class="cyan">[2] Wallet</span>       <span class="cyan">[6] Autobuy</span>       <span class="cyan">[8] Autosell</span>             \u2551`)
-  l.push(`\u2551  <span class="cyan">[3] Strategy</span>     <span class="cyan">[4] Strategy-</span>                            \u2551`)
+  l.push(`\u2551  <span class="cyan">[3] Strategy</span>     <span class="cyan">[4] Strategy-</span>    <span class="cyan">[9] Set Amount</span>                \u2551`)
   l.push(bRow())
   // Load strategies
   if (!availableStrategies) {
@@ -350,7 +350,8 @@ async function renderSniper() {
     fetchJSON('/api/sniper/positions'),
   ])
   const wallet = status?.wallets?.[c]
-  const balanceData = wallet ? await fetchJSON(`/api/portfolio/balance?chain=${c}&wallet=${wallet}`) : null
+  // Always fetch balance to auto-set wallet from API binding
+  const balanceData = await fetchJSON(`/api/portfolio/balance?chain=${c}`)
 
   l.push('')
   if (status) {
@@ -366,9 +367,10 @@ async function renderSniper() {
     }
     const isActive = s.active?.[c]
     const wSet = w.length > 0
-    l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(28)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} \u2551`)
+    const buyAmt = s.buyAmounts?.[c] || '0.3'
+    l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(20)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} <span class="cyan">AMT</span> ${buyAmt} \u2551`)
     l.push(`\u2551 ${isActive ? '<span class="cyan">RUNNING</span>' : '<span class="error">STOPPED — press [1] to start</span>'} wallet=${sa(w)} \u2551`)
-    l.push(`\u2551 buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0}${' '.repeat(30)} \u2551`)
+    l.push(`\u2551 buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0} amt=${buyAmt} ${c==='sol'?'SOL':'ETH'} ${' '.repeat(18)} \u2551`)
     if (balanceData) {
       const bal = parseFloat(balanceData.balance || 0)
       const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
@@ -551,12 +553,13 @@ document.addEventListener('keydown', e => {
     const c = chain()
     if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: c }).then(r => logToSniper(r?.ok ? `${c} detector started` : 'Error: ' + (r?.error || '?'))) }
     if (e.key === '2') { e.preventDefault(); const addr = prompt(`${c} wallet address:`); if (addr) postJSON('/api/sniper/wallet', { chain: c, address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
-    if (e.key === '3') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % 5; const stratNames = ['speed','snipe','scalp','hold','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
-    if (e.key === '4') { e.preventDefault(); currentStrategy = (currentStrategy - 1 + 5) % 5; const stratNames = ['speed','snipe','scalp','hold','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '3') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % 6; const stratNames = ['speed','snipe','scalp','hold','razor','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '4') { e.preventDefault(); currentStrategy = (currentStrategy - 1 + 6) % 6; const stratNames = ['speed','snipe','scalp','hold','razor','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
     if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
     if (e.key === '6') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
     if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: c }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
     if (e.key === '8') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '9') { e.preventDefault(); const amt = prompt('Enter buy amount in ' + (c === 'sol' ? 'SOL' : 'ETH') + ':'); if (amt && parseFloat(amt) > 0) postJSON('/api/sniper/buy-amount', { chain: c, amount: amt }).then(r => { logToSniper(r?.ok ? `Buy amount set to ${amt} ${c === 'sol' ? 'SOL' : 'ETH'}` : 'Error'); renderSniper() }) }
   }
 })
 
