@@ -46,6 +46,16 @@ html, body { height: 100%; overflow: hidden; background: #0c0c0c; color: #00e676
 #input:focus { background: #00e67605; }
 #status { padding: 5px 12px; font-size: 11px; white-space: nowrap; min-width: 80px; text-align: right; }
 
+/* ── Filter Button ── */
+.filter-btn { cursor: pointer; color: #44ddff; font-size: 11px; padding: 2px 6px; border: 1px solid #1a3a1a; border-radius: 2px; user-select: none; }
+.filter-btn:hover { border-color: #44ddff; }
+
+/* ── Action Buttons ── */
+.buy-btn, .sell-btn { cursor: pointer; color: #00e676; background: #00e6760a; padding: 0 4px; border-radius: 2px; user-select: none; border: 1px solid #1a3a1a; }
+.buy-btn:hover { background: #00e67622; border-color: #00e676; }
+.sell-btn { color: #ff5252; background: #ff52520a; }
+.sell-btn:hover { background: #ff525222; border-color: #ff5252; }
+
 /* ── Colors ── */
 .highlight { color: #ffd740; }
 .gold { color: #ffd740; }

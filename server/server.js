@@ -219,19 +219,23 @@ app.post('/api/sniper/autosell', express.json(), (req, res) => {
 })
 
 app.post('/api/sniper/strategy', express.json(), (req, res) => {
-  const strat = req.body.strategy || 'manual'
+  const strat = req.body.strategy || 'snipe'
   const chain = req.body.chain || 'sol'
-  if (strat === 'manual') {
+  sniper.setStrategy(strat)
+  // Enable auto-buy + auto-sell for HF strategies
+  if (strat !== 'manual') {
+    sniper.setAutoBuy(chain, true)
+    sniper.setAutoSell(chain, true)
+  } else {
     sniper.setAutoBuy(chain, false)
     sniper.setAutoSell(chain, false)
-  } else if (strat === 'conservative') {
-    sniper.setAutoBuy(chain, true)
-    sniper.setAutoSell(chain, true, 50)
-  } else if (strat === 'aggressive') {
-    sniper.setAutoBuy(chain, true)
-    sniper.setAutoSell(chain, true, 15)
   }
   res.json({ ok: true, strategy: strat })
+})
+
+app.get('/api/sniper/strategies', (req, res) => {
+  const { STRATEGIES } = require('../features/sniper/server-adapter.js')
+  res.json(STRATEGIES)
 })
 
 app.get('/api/sniper/status', (req, res) => { res.json(sniper.getStatus()) })

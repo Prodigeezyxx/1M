@@ -4,6 +4,8 @@ let cachedData = { trending: [], trenches: [], smartMoney: [], kol: [], signals:
 let portAddr = ''
 let lastChain = 'sol'
 let loading = false
+let showUnder5k = true
+let availableStrategies = null
 
 const $ = id => document.getElementById(id)
 const content = $('content')
@@ -110,14 +112,17 @@ function renderHub() {
     l.push(bRow())
   }
 
-  l.push(tRow(`\U0001F4E1 NEW LAUNCHES (${trens.length})`))
-  if (trens.length > 0) {
-    l.push(`<span class="bold">\u2551  SYMBOL    MC          LIQ         AGE  SM  RUG    VOL           \u2551</span>`)
+  let trensFiltered = trens
+  if (showUnder5k) trensFiltered = trensFiltered.filter(t => parseFloat(t.mc || t.marketCap || 0) < 5000)
+  l.push(tRow(`\U0001F4E1 NEW LAUNCHES (${trensFiltered.length}/${trens.length})`))
+  if (trensFiltered.length > 0) {
+    l.push(`<span class="bold">\u2551  SYM    MC-BAR               MC     AGE SM VOL    \u2551</span>`)
     l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
-    for (const t of trens.slice(0, 12)) {
-      const r = t.isHoneypot ? '<span class="error">HONEY</span>' : rugC(t.rugRatio||0)
+    for (const t of trensFiltered.slice(0, 20)) {
+      const mcNum = parseFloat(t.mc || t.marketCap || 0)
+      const r = t.isHoneypot ? '<span class="error">\u2622</span>' : rugC(t.rugRatio||0)
       const a = t.age !== undefined ? ago(parseInt(t.createdAt)||t.age) : 'new'
-      l.push(`\u2551 <span class="ca" data-addr="${esc(t.address)}">${tr(t.symbol,8).padEnd(8)}</span> ${fiat(t.mc).padEnd(10)} ${fiat(t.liquidity||t.liq).padEnd(11)} ${a.padEnd(4)} ${sm(t.smartMoney||t.smartDegen).padEnd(3)} ${r.padEnd(6)} ${fiat(t.volume||t.vol).padEnd(12)} \u2551`)
+      l.push(`\u2551 <span class="ca" data-addr="${esc(t.address)}">${tr(t.symbol,4).padEnd(4)}</span> ${mcBar(mcNum, mcNum*3).padEnd(20)} ${fiat(mcNum).padEnd(8)} ${a.padEnd(4)} ${sm(t.smartMoney||t.smartDegen).padEnd(2)} ${fiat(t.volume||t.vol).padEnd(8)}${r}\u2551`)
     }
     l.push(bRow())
   }
@@ -147,17 +152,19 @@ function renderHub() {
   }
 
   l.push(tRow('\u03B1 ALPHA'))
-  const alphas = sigs?.filter(s => s.score >= 70).slice(0, 12) || []
+  let alphas = sigs?.filter(s => s.score >= 70) || []
+  if (showUnder5k) alphas = alphas.filter(s => s.mc < 5000)
+  alphas = alphas.slice(0, 20)
   if (alphas.length > 0) {
-    l.push(`<span class="bold">\u2551  SYMBOL    SCORE  MC BAR                 ATH          AGE  P5M          \u2551</span>`)
+    l.push(`<span class="bold">\u2551  SYM    SCR MC-BAR              ATH    AGE  CHG     LIQ      SM RUG \u2551</span>`)
     l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
     for (const a of alphas) {
       const sc = a.score >= 80 ? `<span class="cyan">${a.score}</span>` : `<span class="gold">${a.score}</span>`
       const ageStr = a.age > 0 ? ago(Date.now()/1e3 - a.age) : 'new'
-      const chg = a.priceChange != null ? (a.priceChange >= 0 ? `<span class="cyan">+${(a.priceChange*100).toFixed(1)}%</span>` : `<span class="error">${(a.priceChange*100).toFixed(1)}%</span>`) : '<span class="dim">-</span>'
+      const chg = a.priceChange != null ? (a.priceChange >= 0 ? `<span class="cyan">+${(a.priceChange*100).toFixed(0)}%</span>` : `<span class="error">${(a.priceChange*100).toFixed(0)}%</span>`) : '<span class="dim">-</span>'
       const ath = a.ath || a.mc || 0
-      const warn = a.rugRatio > 0.3 ? ' \u2622' : ''
-      l.push(`\u2551 <span class="ca" data-addr="${esc(a.address)}">${tr(a.symbol,8).padEnd(8)}</span> ${sc.toString().padEnd(6)} ${mcBar(a.mc, ath).padEnd(21)} ${fiat(ath).padEnd(9)} ${ageStr.padEnd(4)} ${chg.padEnd(10)}${warn} \u2551`)
+      const warn = a.rugRatio > 0.3 ? '<span class="error">\u2622</span>' : a.rugRatio > 0.1 ? '<span class="gold">\u26A0</span>' : '<span class="dim">-</span>'
+      l.push(`\u2551 <span class="ca" data-addr="${esc(a.address)}">${tr(a.symbol,4).padEnd(4)}</span> ${sc.toString().padEnd(3)} ${mcBar(a.mc, ath).padEnd(20)} ${fiat(ath).padEnd(6)} ${ageStr.padEnd(4)} ${chg.padEnd(7)} ${fiat(a.liq).padEnd(6)} ${sm(a.smartDegen).padEnd(2)} ${warn}\u2551`)
     }
     l.push(bRow())
   }
@@ -326,15 +333,15 @@ async function renderSniper() {
   l.push(tRow(`SNIPER [${c.toUpperCase()}]`))
   l.push(`\u2551  <span class="dim">Real-time token detector for ${c}</span>                            \u2551`)
   l.push(bRow()); l.push('')
-  l.push(tRow('CONTROLS'))
-  l.push(`\u2551  <span class="cyan">[1] Start ${c}</span>   Start detector on ${c}                     \u2551`)
-  l.push(`\u2551  <span class="cyan">[2] Stop</span>         Stop all detectors                           \u2551`)
-  l.push(`\u2551  <span class="cyan">[3] Wallet</span>       Set ${c} wallet address                      \u2551`)
-  l.push(`\u2551  <span class="cyan">[4] Autobuy</span>      Toggle auto-buy                              \u2551`)
-  l.push(`\u2551  <span class="cyan">[5] Autosell</span>     Toggle auto-sell                             \u2551`)
-  l.push(`\u2551  <span class="cyan">[6] Strategy</span>     Cycle: manual / conservative / aggressive     \u2551`)
-  l.push(`\u2551  <span class="cyan">[7] Sell All</span>     Sell all positions                            \u2551`)
+  l.push(tRow('CONTROLS (keyboard)'))
+  l.push(`\u2551  <span class="cyan">[1] Start ${c}</span>   <span class="cyan">[5] Stop</span>          <span class="cyan">[7] SellAll</span>              \u2551`)
+  l.push(`\u2551  <span class="cyan">[2] Wallet</span>       <span class="cyan">[6] Autobuy</span>       <span class="cyan">[8] Autosell</span>             \u2551`)
+  l.push(`\u2551  <span class="cyan">[3] Strategy</span>     <span class="cyan">[4] Strategy-</span>                            \u2551`)
   l.push(bRow())
+  // Load strategies
+  if (!availableStrategies) {
+    fetchJSON('/api/sniper/strategies').then(s => { availableStrategies = s; if (activeTab === 7) renderSniper() })
+  }
 
   const [status, detected, buys, positions] = await Promise.all([
     fetchJSON('/api/sniper/status'),
@@ -348,15 +355,19 @@ async function renderSniper() {
   l.push('')
   if (status) {
     const s = status
+    const strat = availableStrategies?.[s.strategy]
+    const stratLabel = strat ? `${s.strategyLabel} (${strat.desc})` : s.strategyLabel || 'snipe'
     const ab = s.autoBuy?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
-    const as = s.autoSell?.[c] ? `<span class="cyan">ON (${s.sellTargets?.[c] || 25}%)</span>` : '<span class="dim">OFF</span>'
+    const as = s.autoSell?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
     const w = s.wallets?.[c] || ''
-    l.push(`<span class="dim">active=${s.active?.[c]} wallet=${sa(w)} autobuy=${ab} autosell=${as} buys=${s.autoBuyCounts?.[c]||0}</span>`)
+    l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(30)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} \u2551`)
+    l.push(`\u2551 active=${s.active?.[c]} wallet=${sa(w)} buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0} \u2551`)
     if (balanceData) {
       const bal = parseFloat(balanceData.balance || 0)
       const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
-      l.push(`<span class="${bal > 0 ? 'cyan' : 'dim'}">  Balance: ${bal.toFixed(4)} ${sym}</span>`)
+      l.push(`\u2551 Balance: <span class="${bal > 0 ? 'cyan' : 'dim'}">${bal.toFixed(4)} ${sym}</span>${' '.repeat(30)}\u2551`)
     }
+    l.push(`\u255c${'\u2550'.repeat(56)}\u255e`)
     l.push('')
   }
 
@@ -479,6 +490,8 @@ function switchTab(idx) {
 
 function updateUI() {
   $('tabs').innerHTML = TABS.map((t,i)=>`<span class="tab${i===activeTab?' active':''}" data-tab="${i}">${i===activeTab?`[${t}]`:t}</span>`).join('')
+  const s = document.getElementById('under5k-toggle')
+  if (s) s.textContent = showUnder5k ? '[<5k]' : '[ALL]'
   $('time').textContent = new Date().toLocaleTimeString('en-US',{hour12:false})
 }
 
@@ -510,8 +523,7 @@ function logToSniper(msg) {
   if (log) log.innerHTML = esc(msg) + '<br>' + log.innerHTML.substring(0, 2000)
 }
 
-let currentStrategy = 0
-const STRATEGIES = ['manual', 'conservative', 'aggressive']
+let currentStrategy = 1 // default to snipe
 
 document.addEventListener('keydown', e => {
   const m={F1:0,F2:1,F3:2,F4:3,F5:4,F6:5,F7:6,F8:7}; if(e.key in m){e.preventDefault();switchTab(m[e.key])}
@@ -530,12 +542,13 @@ document.addEventListener('keydown', e => {
   if (activeTab === 7) {
     const c = chain()
     if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: c }).then(r => logToSniper(r?.ok ? `${c} detector started` : 'Error: ' + (r?.error || '?'))) }
-    if (e.key === '2') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
-    if (e.key === '3') { e.preventDefault(); const addr = prompt(`${c} wallet address:`); if (addr) postJSON('/api/sniper/wallet', { chain: c, address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
-    if (e.key === '4') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
-    if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
-    if (e.key === '6') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % STRATEGIES.length; const s = STRATEGIES[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '2') { e.preventDefault(); const addr = prompt(`${c} wallet address:`); if (addr) postJSON('/api/sniper/wallet', { chain: c, address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '3') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % 5; const stratNames = ['speed','snipe','scalp','hold','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '4') { e.preventDefault(); currentStrategy = (currentStrategy - 1 + 5) % 5; const stratNames = ['speed','snipe','scalp','hold','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
+    if (e.key === '6') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
     if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: c }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
+    if (e.key === '8') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
   }
 })
 
@@ -546,10 +559,14 @@ function logToFactory(msg) {
 
 $('tabs').addEventListener('click', e=>{const t=e.target.closest('.tab');if(t)switchTab(parseInt(t.dataset.tab))})
 $('chain-select').addEventListener('change', ()=>{updateUI();switchTab(activeTab)})
+document.addEventListener('click', e => {
+  if (e.target.id === 'under5k-toggle') { showUnder5k = !showUnder5k; updateUI(); switchTab(activeTab) }
+})
 input.addEventListener('keydown', e=>{if(e.key==='Enter')handleSubmit()})
 
 let pollStart = Date.now()
 
+fetchJSON('/api/sniper/strategies').then(s => { availableStrategies = s })
 checkConn(); updateUI(); switchTab(0); factoryConnectSSE(); sniperConnectSSE(); setInterval(updateUI,1000); input.focus()
 setInterval(refreshAll, 8000)
 refreshAll()

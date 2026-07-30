@@ -30,6 +30,7 @@ const PATTERNS = [
   { id: 'LIQUIDITY_INJECT',     label: 'Liq Add',      weight: 15, cat: 'bullish' },
   { id: 'PRE_BOND_RUN',         label: 'Pre-Bond Run', weight: 22, cat: 'bullish' },
   { id: 'SNIPER_TARGET',        label: 'Sniper',       weight: 35, cat: 'bullish' },
+
   { id: 'BUNDLE_LAUNCH',        label: 'Bundle',       weight: -50, cat: 'bearish' },
   { id: 'RUG_SCAM',             label: 'Rug',          weight: -100, cat: 'bearish' },
   { id: 'DEV_DUMP',             label: 'DevDump',      weight: -60, cat: 'bearish' },
