@@ -139,24 +139,29 @@ class SniperServerAdapter extends EventEmitter {
       this.runRugCheck(token.address, chain)
 
       // Security check — run gmgn-cli token security to block honeypots and high-risk tokens
-      try {
-        const secOut = execSync(`node "${GMGN_CLI}" token security --chain ${chain} --address ${token.address} --raw`, { encoding: 'utf-8', timeout: 8000 }).trim()
-        const sec = JSON.parse(secOut)
-        if (sec.is_honeypot === true || sec.is_honeypot === 'true' || sec.honeypot === 1) {
-          this.emit('log', `  [SECURITY] ${token.symbol} — honeypot, blocked`)
-          this.emit('filtered', { token, reason: 'honeypot' })
-          return
-        }
-        const reasons = []
-        if (sec.is_open_source === false) reasons.push('source_not_verified')
-        if (sec.renounced === -1 || sec.renounced_mint === false || sec.renounced_freeze_account === false) reasons.push('not_renounced')
-        if (sec.lock_summary?.is_locked === false) reasons.push('liquidity_unlocked')
-        if (sec.can_sell === 0 || sec.can_not_sell === 1) reasons.push('cannot_sell')
-        if (sec.is_show_alert === true) reasons.push('gmgn_alert')
-        if (reasons.length > 0) {
-          this.emit('log', `  [SECURITY] ${token.symbol} — flags: ${reasons.join(', ')}`)
-        }
-      } catch {}
+      // Only on Robinhood (slower chain, safety > speed). Solana skips this — the
+      // lightweight filterToken + rug ratio checks run in <1ms and blocking execSync
+      // for 1-2s per token would freeze the event loop, missing subsequent detects.
+      if (chain !== 'sol') {
+        try {
+          const secOut = execSync(`node "${GMGN_CLI}" token security --chain ${chain} --address ${token.address} --raw`, { encoding: 'utf-8', timeout: 8000 }).trim()
+          const sec = JSON.parse(secOut)
+          if (sec.is_honeypot === true || sec.is_honeypot === 'true' || sec.honeypot === 1) {
+            this.emit('log', `  [SECURITY] ${token.symbol} — honeypot, blocked`)
+            this.emit('filtered', { token, reason: 'honeypot' })
+            return
+          }
+          const reasons = []
+          if (sec.is_open_source === false) reasons.push('source_not_verified')
+          if (sec.renounced === -1 || sec.renounced_mint === false || sec.renounced_freeze_account === false) reasons.push('not_renounced')
+          if (sec.lock_summary?.is_locked === false) reasons.push('liquidity_unlocked')
+          if (sec.can_sell === 0 || sec.can_not_sell === 1) reasons.push('cannot_sell')
+          if (sec.is_show_alert === true) reasons.push('gmgn_alert')
+          if (reasons.length > 0) {
+            this.emit('log', `  [SECURITY] ${token.symbol} — flags: ${reasons.join(', ')}`)
+          }
+        } catch {}
+      }
 
       if (this.autoBuy[chain] && this.wallets[chain]) {
         // Immediate profitability check for Razor: skip if price dropping

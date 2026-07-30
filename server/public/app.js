@@ -6,6 +6,7 @@ let lastChain = 'sol'
 let loading = false
 let showUnder5k = true
 let availableStrategies = null
+let lastSniperStatus = null
 
 const $ = id => document.getElementById(id)
 const content = $('content')
@@ -349,6 +350,7 @@ async function renderSniper() {
     fetchJSON('/api/sniper/buys?limit=5'),
     fetchJSON('/api/sniper/positions'),
   ])
+  lastSniperStatus = status
   const wallet = status?.wallets?.[c]
   // Always fetch balance to auto-set wallet from API binding
   const balanceData = await fetchJSON(`/api/portfolio/balance?chain=${c}`)
@@ -639,9 +641,9 @@ document.addEventListener('keydown', e => {
     if (e.key === '3') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % 6; const stratNames = ['speed','snipe','scalp','hold','razor','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
     if (e.key === '4') { e.preventDefault(); currentStrategy = (currentStrategy - 1 + 6) % 6; const stratNames = ['speed','snipe','scalp','hold','razor','manual']; const s = stratNames[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
     if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
-    if (e.key === '6') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '6') { e.preventDefault(); const cur = lastSniperStatus?.autoBuy?.[c] || false; postJSON('/api/sniper/autobuy', { chain: c, enabled: !cur }).then(r => { logToSniper(r?.ok ? `Auto-buy ${!cur ? 'enabled' : 'disabled'}` : 'Error'); renderSniper() }) }
     if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: c }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
-    if (e.key === '8') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '8') { e.preventDefault(); const cur = lastSniperStatus?.autoSell?.[c] || false; postJSON('/api/sniper/autosell', { chain: c, enabled: !cur }).then(r => { logToSniper(r?.ok ? `Auto-sell ${!cur ? 'enabled' : 'disabled'}` : 'Error'); renderSniper() }) }
     if (e.key === '9') { e.preventDefault(); const amt = prompt('Enter buy amount in ' + (c === 'sol' ? 'SOL' : 'ETH') + ':'); if (amt && parseFloat(amt) > 0) postJSON('/api/sniper/buy-amount', { chain: c, amount: amt }).then(r => { logToSniper(r?.ok ? `Buy amount set to ${amt} ${c === 'sol' ? 'SOL' : 'ETH'}` : 'Error'); renderSniper() }) }
   }
 })
