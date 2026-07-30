@@ -6,7 +6,7 @@ const app = express()
 const PORT = 3001
 const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
 
-app.use(express.static(path.join(__dirname, 'public')))
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: false }))
 
 function run(args) {
   try {
