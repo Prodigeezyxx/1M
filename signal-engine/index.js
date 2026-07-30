@@ -1,11 +1,13 @@
 const { execSync } = require('child_process')
+const path = require('path')
 
 const CHAINS = ['sol', 'bsc', 'base', 'eth', 'robinhood']
+const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
 
 function run(args) {
   try {
-    const cmd = `gmgn-cli ${args.join(' ')} --raw 2>NUL`
-    return execSync(cmd, { encoding: 'utf-8', timeout: 15000, shell: 'pwsh.exe' }).trim()
+    const cmd = `node "${GMGN_CLI}" ${args.join(' ')} --raw`
+    return execSync(cmd, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
   } catch { return '' }
 }
 function parse(out) { try { return JSON.parse(out) } catch { return null } }

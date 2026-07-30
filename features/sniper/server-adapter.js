@@ -1,5 +1,7 @@
 const EventEmitter = require('events')
 const { execSync } = require('child_process')
+const path = require('path')
+const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
 const { filterToken, quickRugCheck } = require('./filter')
 const { startSolDetector } = require('./detector-sol')
 const { startEthDetector } = require('./detector-eth')
@@ -107,7 +109,7 @@ class SniperServerAdapter extends EventEmitter {
 
   async runRugCheck(address, chain) {
     try {
-      const out = execSync(`gmgn-cli token traders --chain ${chain} --address ${address} --limit 15 --order-by profit --direction desc --raw 2>NUL`, { encoding: 'utf-8', timeout: 10000, shell: 'pwsh.exe', windowsHide: true })
+      const out = execSync(`node "${GMGN_CLI}" token traders --chain ${chain} --address ${address} --limit 15 --order-by profit --direction desc --raw`, { encoding: 'utf-8', timeout: 10000 })
       const data = JSON.parse(out.trim())
       const traders = data?.list || []
       const topProfitable = traders.filter(t => parseFloat(t.profit || 0) > 0).slice(0, 8)
