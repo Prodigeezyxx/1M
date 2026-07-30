@@ -268,10 +268,10 @@ async function scanChain(chain) {
   ])
 
   const all = []
-  if (tData) all.push(...scanTrenches(chain, tData.data?.new_creation || tData.data?.pump || []))
-  if (hData && Array.isArray(hData)) all.push(...scanHotSearch(chain, hData[0]?.tokens || []))
-  if (rData) all.push(...scanTrending(chain, rData.data?.rank || []))
-  if (sData) all.push(...scanSmartMoney(chain, sData.list || []))
+  if (tData) all.push(...scanTrenches(chain, tData?.new_creation || tData?.pump || []))
+  if (hData) all.push(...scanHotSearch(chain, hData?.tokens || []))
+  if (rData) all.push(...scanTrending(chain, rData?.data?.rank || rData?.rank || []))
+  if (sData) all.push(...scanSmartMoney(chain, sData?.list || []))
   return all
 }
 

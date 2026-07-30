@@ -49,11 +49,11 @@ app.get('/api/trending', (req, res) => {
 app.get('/api/trenches', (req, res) => {
   const c = q(req.query.chain)
   const key = `trenches:${c}`
-  const data = fetchOrRefresh(['market', 'trenches', '--chain', c, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '40'], key, TTL.trenches, out => { const d = parse(out); return d?.data?.new_creation || d?.data?.pump || [] })
+  const data = fetchOrRefresh(['market', 'trenches', '--chain', c, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '40'], key, TTL.trenches, out => { const d = parse(out); return d?.new_creation || d?.pump || [] })
   if (data) return res.json(data)
   const out = execSync(`node "${GMGN_CLI}" market trenches --chain ${c} --type new_creation --filter-preset safe --limit 40 --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
   if (out) setCache(key, out)
-  const d = parse(out); res.json(d?.data?.new_creation || d?.data?.pump || [])
+  const d = parse(out); res.json(d?.new_creation || d?.pump || [])
 })
 
 app.get('/api/smartmoney', (req, res) => {

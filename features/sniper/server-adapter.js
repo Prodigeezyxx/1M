@@ -204,18 +204,17 @@ class SniperServerAdapter extends EventEmitter {
     const poll = () => {
       if (!this.active[chain]) return
       try {
-        const out = execSync(`node "${GMGN_CLI}" market trenches --chain ${chain} --type new_creation --filter-preset safe --limit 15 --raw`, { encoding: 'utf-8', timeout: 10000 }).trim()
+        const out = execSync(`node "${GMGN_CLI}" market trenches --chain ${chain} --type new_creation --limit 20 --raw`, { encoding: 'utf-8', timeout: 10000 }).trim()
         const data = JSON.parse(out)
-        const tokens = data?.data?.new_creation || data?.data?.pump || []
+        const tokens = data?.new_creation || data?.pump || []
         for (const t of tokens) {
           const addr = t.address || t.mint || ''
-          const mc = parseFloat(t.mc || t.marketCap || 0)
+          const mc = parseFloat(t.market_cap || t.marketCap || t.mc || 0)
           if (!addr || seen.has(addr)) continue
-          // Skip tokens above 5k MC — focus on super early
           if (mc > 5000) continue
           seen.add(addr)
           if (seen.size > 1000) seen.clear()
-          onDetect({ chain, address: addr, name: t.name || t.symbol || '', symbol: t.symbol || '', mc, liq: parseFloat(t.liquidity || t.liq || 0), age: t.age || 0, source: 'poll' })
+          onDetect({ chain, address: addr, name: t.name || t.symbol || '', symbol: t.symbol || '', mc, liq: parseFloat(t.liquidity || t.liq || 0), age: parseInt(t.created_timestamp) || t.age || 0, source: 'poll' })
         }
       } catch {}
       setTimeout(poll, 2000)
