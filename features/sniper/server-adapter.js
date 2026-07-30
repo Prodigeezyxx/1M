@@ -1,5 +1,6 @@
 const EventEmitter = require('events')
-const { filterToken } = require('./filter')
+const { execSync } = require('child_process')
+const { filterToken, quickRugCheck } = require('./filter')
 const { startSolDetector } = require('./detector-sol')
 const { startEthDetector } = require('./detector-eth')
 const { executeBuy } = require('./executor')
@@ -54,6 +55,9 @@ class SniperServerAdapter extends EventEmitter {
 
       this.emit('log', `  passed filters ✓`)
 
+      // Fire-and-forget deep rug check (non-blocking)
+      this.runRugCheck(token.address, chain)
+
       // Auto-buy if enabled and wallet is set
       if (this.autoBuy[chain] && this.wallets[chain]) {
         this.emit('log', `  auto-buy triggered...`)
@@ -99,6 +103,29 @@ class SniperServerAdapter extends EventEmitter {
     this.stop('sol')
     this.stop('robinhood')
     this.log('All detectors stopped.')
+  }
+
+  async runRugCheck(address, chain) {
+    try {
+      const out = execSync(`gmgn-cli token traders --chain ${chain} --address ${address} --limit 15 --order-by profit --direction desc --raw 2>NUL`, { encoding: 'utf-8', timeout: 10000, shell: 'pwsh.exe', windowsHide: true })
+      const data = JSON.parse(out.trim())
+      const traders = data?.list || []
+      const topProfitable = traders.filter(t => parseFloat(t.profit || 0) > 0).slice(0, 8)
+      let devProfit = 0, extractors = 0
+      for (const t of topProfitable) {
+        const tags = t.maker_token_tags || []
+        if (tags.some(tg => ['dev_team', 'bundler', 'sniper'].includes(tg))) {
+          devProfit += parseFloat(t.profit || 0)
+          extractors++
+        }
+      }
+      if (extractors >= 3 && devProfit > 500) {
+        this.log(`  \u2622 RUG FLAG: ${extractors} dev/bundler/sniper wallets extracted $${devProfit.toLocaleString()}`)
+        this.emit('rug-flagged', { address, chain, extractors, devProfit, confidence: Math.min(100, 60 + extractors * 5) })
+      } else if (extractors > 0) {
+        this.log(`  \u26A0 ${extractors} dev/bundler wallets profitable: $${devProfit.toLocaleString()}`)
+      }
+    } catch { /* rugcheck non-critical, silent fail */ }
   }
 
   getStatus() {

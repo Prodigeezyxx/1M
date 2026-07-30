@@ -111,8 +111,36 @@ function renderHub() {
     l.push(bRow()); l.push('')
   }
 
+  // ── RUG WARNINGS ──
+  const rugs = (sigs || []).filter(s => (s.patterns||[]).includes('DEV_SNIPER_RUG')).slice(0, 6)
+  if (rugs.length > 0) {
+    l.push(tRow(`\u2622 RUG WARNINGS (${rugs.length})`))
+    l.push(`<span class="bold">\u2551  SYMBOL     MC          SCORE  PATTERNS                          \u2551</span>`)
+    l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
+    for (const s of rugs) {
+      const sc = `<span class="error">${s.score}</span>`
+      const pats = (s.patternLabels||[]).filter(p => ['DevSniperRug','Bundle','Rug','NoSmartMoney'].includes(p)).join(' ').padEnd(30)
+      l.push(`\u2551 <span class="ca" data-addr="${esc(s.address)}">${tr(s.symbol,8).padEnd(9)}</span> ${fiat(s.mc).padEnd(10)} ${sc.toString().padEnd(5)} <span class="error">${tr(pats,30).padEnd(30)}</span> \u2551`)
+    }
+    l.push(bRow()); l.push('')
+  }
+
+  // ── ZERO SMART MONEY WARNINGS ──
+  const noSm = (sigs || []).filter(s => (s.patterns||[]).includes('ZERO_SMART_MONEY') && !(s.patterns||[]).includes('DEV_SNIPER_RUG')).slice(0, 4)
+  if (noSm.length > 0) {
+    l.push(tRow(`\u26A0 NO SMART MONEY (${noSm.length})`))
+    l.push(`<span class="bold">\u2551  SYMBOL     MC          SCORE  PATTERNS                          \u2551</span>`)
+    l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
+    for (const s of noSm) {
+      const sc = s.score >= 50 ? `<span class="gold">${s.score}</span>` : `<span class="error">${s.score}</span>`
+      const pats = (s.patternLabels||[]).filter(p => !['DevSniperRug'].includes(p)).slice(0,2).join(' ').padEnd(30)
+      l.push(`\u2551 <span class="ca" data-addr="${esc(s.address)}">${tr(s.symbol,8).padEnd(9)}</span> ${fiat(s.mc).padEnd(10)} ${sc.toString().padEnd(5)} ${tr(pats,30).padEnd(30)} \u2551`)
+    }
+    l.push(bRow()); l.push('')
+  }
+
   // ── TOP ALPHA SIGNALS ──
-  const top = (sigs || []).filter(s => s.score >= 55).slice(0, 6)
+  const top = (sigs || []).filter(s => s.score >= 55 && !(s.patterns||[]).includes('DEV_SNIPER_RUG')).slice(0, 6)
   if (top.length > 0) {
     l.push(tRow(`\uD83E\uDDEA ALPHA SIGNALS (${top.length})`))
     l.push(`<span class="bold">\u2551  SYMBOL     SCORE  MC          PATTERNS                   \u2551</span>`)
@@ -177,7 +205,9 @@ function renderSignals() {
       const sc = s.score >= 70 ? `<span class="cyan">${s.score}</span>` : s.score >= 50 ? `<span class="gold">${s.score}</span>` : s.score >= 40 ? `<span class="orange">${s.score}</span>` : `<span class="error">${s.score}</span>`
       const ct = s.chain ? s.chain.toUpperCase().slice(0,2).padEnd(2) : 'SO'
       const pats = (s.patternLabels||[]).slice(0,3).join(' ').padEnd(20)
-      const risk = s.isHoneypot ? '<span class="error">HONEY</span>' : s.isWash ? '<span class="error">WASH</span>' : !s.renounced ? '<span class="orange">CONC</span>' : s.botRate > 0.5 ? '<span class="gold">BOT</span>' : s.rugRatio > 0.1 ? `<span class="gold">${(s.rugRatio*100).toFixed(0)}%</span>` : '<span class="green">LOW</span>'
+      const isDevRug = (s.patterns||[]).includes('DEV_SNIPER_RUG')
+      const isNoSm = (s.patterns||[]).includes('ZERO_SMART_MONEY') && !isDevRug
+      const risk = s.isHoneypot ? '<span class="error">HONEY</span>' : isDevRug ? '<span class="error">\u2622 RUG</span>' : s.isWash ? '<span class="error">WASH</span>' : !s.renounced ? '<span class="orange">CONC</span>' : isNoSm ? '<span class="gold">NO SM</span>' : s.botRate > 0.5 ? '<span class="gold">BOT</span>' : s.rugRatio > 0.1 ? `<span class="gold">${(s.rugRatio*100).toFixed(0)}%</span>` : '<span class="green">LOW</span>'
       const ageStr = s.age > 0 ? ago(Date.now()/1e3 - s.age) : 'new'
       l.push(`\u2551 ${ct} ${sc.toString().padEnd(5)} <span class="ca" data-addr="${esc(s.address)}">${tr(s.symbol,8).padEnd(9)}</span> ${fiat(s.mc).padEnd(10)} ${tr(pats,20).padEnd(20)} ${risk.padEnd(5)} ${ageStr.padEnd(4)} \u2551`)
     }
@@ -185,7 +215,9 @@ function renderSignals() {
   l.push(bRow())
   const high = sigs.filter(s => s.score >= 70).length; const med = sigs.filter(s => s.score >= 50 && s.score < 70).length
   const low = sigs.filter(s => s.score < 50).length; const rug = sigs.filter(s => s.isHoneypot || s.entrapRate > 0.1).length
-  l.push(`<span class="dim">  \u25b2${high}  \u25b6${med}  \u25bc${low}  \u2622${rug}  |  ${sigs.length} signals</span>`)
+  const devRug = sigs.filter(s => (s.patterns||[]).includes('DEV_SNIPER_RUG')).length
+  const noSm = sigs.filter(s => (s.patterns||[]).includes('ZERO_SMART_MONEY') && !(s.patterns||[]).includes('DEV_SNIPER_RUG')).length
+  l.push(`<span class="dim">  \u25b2${high}  \u25b6${med}  \u25bc${low}  \u2622${rug}  \u2622DevRug:${devRug}  \u26A0NoSM:${noSm}  |  ${sigs.length} signals</span>`)
   content.innerHTML = l.join('\n'); bindCA()
 }
 
@@ -196,9 +228,10 @@ async function renderTokenSearch(tokenAddr) {
   }
   const [chain, addr] = tokenAddr.includes(':') ? tokenAddr.split(':') : ['sol', tokenAddr]
   status.textContent = 'loading…'
-  const [info, sec] = await Promise.all([
+  const [info, sec, rug] = await Promise.all([
     fetch(`/api/token/info?chain=${chain}&address=${addr}`).then(r => r.json()),
-    fetch(`/api/token/security?chain=${chain}&address=${addr}`).then(r => r.json())
+    fetch(`/api/token/security?chain=${chain}&address=${addr}`).then(r => r.json()),
+    fetch(`/api/token/rugcheck?chain=${chain}&address=${addr}`).then(r => r.json()).catch(() => null)
   ])
   status.textContent = ''
   const l = ['']
@@ -210,6 +243,7 @@ async function renderTokenSearch(tokenAddr) {
     l.push(`\u2551  Price: <span class="cyan">$${parseFloat(p).toFixed(10)}</span>`)
     l.push(`\u2551  Liq: ${fiat(info.liquidity)}   Holders: ${info.holder_count}`)
     l.push(`\u2551  Supply: ${info.total_supply?parseFloat(info.total_supply).toLocaleString():'N/A'}   ${info.launchpad_platform||''}`)
+    l.push(`\u2551  SM: ${info.wallet_tags_stat?.smart_wallets||0}  KOL: ${info.wallet_tags_stat?.renowned_wallets||0}  Bundler: ${info.wallet_tags_stat?.bundler_wallets||0}  Sniper: ${info.wallet_tags_stat?.sniper_wallets||0}`)
   } else {
     l.push(`\u2551  <span class="ca" data-addr="${esc(addr)}">${sa(addr)}</span>  <span class="cyan">${chain.toUpperCase()}</span>`)
     l.push(`\u2551  <span class="error">UNAVAILABLE</span>`)
@@ -225,6 +259,25 @@ async function renderTokenSearch(tokenAddr) {
     l.push(`\u2551  Tax: ${(sec.buy_tax*100).toFixed(1)}%/${(sec.sell_tax*100).toFixed(1)}%  Snip: ${sec.sniper_count||0}  Wash: ${sec.is_wash_trading?'<span class="error">YES</span>':'<span class="green">NO</span>'}`)
   } else {
     l.push(`\u2551  <span class="error">SECURITY UNAVAILABLE</span>`)
+  }
+  // ── Deep Rug Check ──
+  if (rug && !rug.error) {
+    if (rug.isDevSniperRug) {
+      l.push(`<span class="bold">\u2551  \u2622 DEV-SNIPER RUG DETECTED (${rug.confidence}% confidence) \u2622</span>`)
+      l.push(`\u2551  <span class="error">Top profitable wallets are dev_team + bundler + sniper</span>`)
+      l.push(`\u2551  Dev extraction profit: <span class="error">\$${rug.devProfit.toLocaleString()}</span>  |  Bundler profit: <span class="error">\$${rug.bundlerProfit.toLocaleString()}</span>`)
+      if (rug.topExtractors.length > 0) {
+        l.push(`\u2551  Extraction wallets:`)
+        rug.topExtractors.slice(0,4).forEach(e => {
+          const tagStr = e.tags.filter(t => ['dev_team','bundler','sniper'].includes(t)).join(',')
+          l.push(`\u2551    <span class="ca" data-addr="${esc(e.address)}">${sa(e.address)}</span> +\$${e.profit.toLocaleString()} [${tagStr}]`)
+        })
+      }
+    } else if (rug.topExtractors.length > 0) {
+      l.push(`<span class="bold">\u2551  TRADER PATTERN</span>`)
+      l.push(`\u2551  ${rug.topExtractors.length} dev/bundler/sniper wallets with positive profit`)
+      l.push(`\u2551  Total extractor profit: <span class="gold">\$${rug.devProfit.toLocaleString()}</span>`)
+    }
   }
   l.push(bRow())
   content.innerHTML = l.join('\n'); bindCA()
@@ -399,6 +452,7 @@ function sniperConnectSSE() {
       else if (data.type === 'filtered') { if (activeTab === 7) renderSniper() }
       else if (data.type === 'buy') { sniperBuys.unshift(data.result); sniperBuys = sniperBuys.slice(0, 100); if (activeTab === 7) renderSniper() }
       else if (data.type === 'status') { sniperStatus = data.status; if (activeTab === 7) renderSniper() }
+      else if (data.type === 'rug-flagged') { sniperLogs.push(`\u2622 RUG FLAGGED: ${data.address.slice(0,10)}.. (${data.confidence}%)`); if (activeTab === 7) renderSniper() }
     } catch {}
   }
   sniperEventSource.onerror = () => setTimeout(sniperConnectSSE, 3000)

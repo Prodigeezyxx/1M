@@ -213,6 +213,70 @@ app.get('/api/stream', (req, res) => {
   res.on('close', () => { sseClients = sseClients.filter(c => c !== res) })
 })
 
+// ── Deep Rug Check API ─────────────────────────────────────────────
+
+app.get('/api/token/rugcheck', async (req, res) => {
+  const chain = req.query.chain || 'sol'
+  const addr = req.query.address
+  if (!addr) return res.status(400).json({ error: 'missing address' })
+
+  // Get top traders to check for dev-sniper-bundler extraction pattern
+  const out = run(['token', 'traders', '--chain', chain, '--address', addr, '--limit', '30', '--order-by', 'profit', '--direction', 'desc'])
+  const data = parse(out)
+  const traders = data?.list || []
+
+  const result = {
+    address: addr,
+    isDevSniperRug: false,
+    confidence: 0,
+    signals: [],
+    devProfit: 0,
+    bundlerProfit: 0,
+    totalTopProfit: 0,
+    topExtractors: [],
+  }
+
+  // Check top 10 profitable traders for dev_team / bundler / sniper tags
+  const topProfitable = traders.filter(t => parseFloat(t.profit || 0) > 0).slice(0, 10)
+
+  for (const t of topProfitable) {
+    const profit = parseFloat(t.profit || 0)
+    const tags = t.maker_token_tags || []
+    result.totalTopProfit += profit
+
+    if (tags.some(tg => ['dev_team', 'bundler', 'sniper'].includes(tg))) {
+      result.topExtractors.push({
+        address: t.address,
+        profit,
+        tags,
+        avgCost: t.avg_cost,
+      })
+      if (tags.includes('dev_team')) result.devProfit += profit
+      if (tags.includes('bundler')) result.bundlerProfit += profit
+    }
+  }
+
+  // RIKA-style pattern: top N profitable wallets are ALL dev_team+bundler+sniper
+  const extractorCount = result.topExtractors.length
+
+  if (extractorCount >= 3 && result.devProfit > 1000) {
+    result.isDevSniperRug = true
+    result.signals.push('dev_sniper_bundler_cluster')
+    result.confidence = Math.min(100, 60 + extractorCount * 5)
+  }
+  if (result.devProfit > result.totalTopProfit * 0.5 && result.totalTopProfit > 0) {
+    result.isDevSniperRug = true
+    result.signals.push('dev_team_dominated_profits')
+    result.confidence = Math.min(100, result.confidence + 25)
+  }
+  if (extractorCount >= 5) {
+    result.signals.push('large_sniper_ring')
+    result.confidence = Math.min(100, result.confidence + 15)
+  }
+
+  res.json(result)
+})
+
 // ── Factory API ──────────────────────────────────────────────────────
 
 const factory = require('../features/pons-factory/server-adapter.js').getAdapter()

@@ -52,6 +52,23 @@ async function filterToken(token, chain) {
   return { pass: true }
 }
 
+// Quick rug pattern check from available data at detection time
+function quickRugCheck(token) {
+  const flags = []
+  // Known bundler/sniper cluster patterns in token metadata
+  if (!token.name || token.name.length < 2) flags.push('no_name')
+  if (!token.symbol || token.symbol.length < 1) flags.push('no_symbol')
+  // If we have creator info from the detection event
+  if (token.creatorWallet) {
+    // creator being the same as sniper address pattern
+    if (token.sniperWallets && token.sniperWallets.includes(token.creatorWallet))
+      flags.push('creator_is_sniper')
+  }
+  return flags
+}
+
+module.exports = { filterToken, nameFilter, symbolFilter, dedupFilter, rateLimitFilter, quickRugCheck }
+
 function simulateCheck(token) {
   return { pass: true }
 }

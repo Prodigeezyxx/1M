@@ -37,6 +37,8 @@ const PATTERNS = [
   { id: 'ENTRAPMENT',           label: 'Entrap',       weight: -55, cat: 'bearish' },
   { id: 'CREATOR_RESUME',       label: 'DevResume',    weight: -70, cat: 'bearish' },
   { id: 'MINT_NOT_RENOUNCED',   label: 'Mintable',     weight: -50, cat: 'bearish' },
+  { id: 'DEV_SNIPER_RUG',       label: 'DevSniperRug', weight: -100, cat: 'bearish' },
+  { id: 'ZERO_SMART_MONEY',     label: 'NoSmartMoney', weight: -20, cat: 'bearish' },
 ]
 const PAT_MAP = Object.fromEntries(PATTERNS.map(p => [p.id, p]))
 
@@ -162,6 +164,16 @@ function detectPatterns(f) {
   // 13. Social Dup / copycat token
   if (f.imageDup > 5 || f.webDup > 5 || f.twitterDup > 5)
     active.push({ ...PAT_MAP.RUG_SCAM, weight: -40, id: 'COPYCAT', label: 'Copycat' })
+
+  // 14. DEV_SNIPER_RUG: dev-launched + dev-bundled + dev-sniped extraction
+  //     Creator is also the sniper. Bundler wallets, zero smart money, dev closed,
+  //     mint renounced (false safety signal), snipers present, price dumping.
+  if (f.bundler > 0 && f.smart === 0 && f.creatorClose && f.renounced && f.sniperCount >= 3 && f.priceChange <= 0)
+    active.push(PAT_MAP.DEV_SNIPER_RUG)
+
+  // 15. Zero Smart Money — no smart wallets touched it (milder warning)
+  if (f.smart === 0 && f.holders > 10 && !active.some(p => p.id === 'DEV_SNIPER_RUG'))
+    active.push(PAT_MAP.ZERO_SMART_MONEY)
 
   // ── Bullish / Alpha Patterns ──
 
