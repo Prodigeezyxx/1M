@@ -3,7 +3,7 @@ const { execSync, exec } = require('child_process')
 const path = require('path')
 const { getSignals } = require('../signal-engine/index.js')
 const app = express()
-const PORT = 3000
+const PORT = 3001
 
 app.use(express.static(path.join(__dirname, 'public')))
 
@@ -344,8 +344,7 @@ app.get('/api/sniper/status', (req, res) => { res.json(sniper.getStatus()) })
 app.get('/api/sniper/detected', (req, res) => { res.json(sniper.getRecentDetected(parseInt(req.query.limit) || 30)) })
 app.get('/api/sniper/buys', (req, res) => { res.json(sniper.getRecentBuys(parseInt(req.query.limit) || 20)) })
 
-startPollers()
-
 app.listen(PORT, () => {
   console.log(`GMGN Terminal Web → http://localhost:${PORT}`)
+  startPollers()
 })
