@@ -219,10 +219,6 @@ function renderSignals() {
   content.innerHTML = l.join('\n'); bindCA()
 }
 
-async function fetchJSON(url) {
-  try { const r = await fetch(url); return await r.json() } catch { return null }
-}
-
 let lastTokenQuery = ''
 function renderTokenSearch(q) {
   if (q) lastTokenQuery = q
@@ -314,26 +310,47 @@ function renderSniper() {
   l.push(`\u2551  <span class="dim">Real-time token detector for Solana + Robinhood</span>           \u2551`)
   l.push(bRow()); l.push('')
   l.push(tRow('CONTROLS'))
-  l.push(`\u2551  <span class="cyan">[1] Start SOL</span>      Start Solana detector                   \u2551`)
-  l.push(`\u2551  <span class="cyan">[2] Stop</span>           Stop all detectors                      \u2551`)
-  l.push(`\u2551  <span class="cyan">[3] Wallet SOL ADDR</span> Set Solana wallet address               \u2551`)
-  l.push(`\u2551  <span class="cyan">[4] Autobuy</span>        Toggle auto-buy                         \u2551`)
+  l.push(`\u2551  <span class="cyan">[1] Start SOL</span>    Start Solana detector                        \u2551`)
+  l.push(`\u2551  <span class="cyan">[2] Stop</span>         Stop all detectors                           \u2551`)
+  l.push(`\u2551  <span class="cyan">[3] Wallet ADDR</span>  Set Solana wallet address                    \u2551`)
+  l.push(`\u2551  <span class="cyan">[4] Autobuy</span>      Toggle auto-buy                              \u2551`)
+  l.push(`\u2551  <span class="cyan">[5] Autosell</span>     Toggle auto-sell                             \u2551`)
+  l.push(`\u2551  <span class="cyan">[6] Strategy</span>     Cycle: manual / conservative / aggressive     \u2551`)
+  l.push(`\u2551  <span class="cyan">[7] Sell All</span>     Sell all positions                            \u2551`)
   l.push(bRow())
-  Promise.all([fetchJSON('/api/sniper/detected?limit=10'), fetchJSON('/api/sniper/buys?limit=5'), fetchJSON('/api/sniper/status')])
-    .then(([detected, buys, status]) => {
+  Promise.all([fetchJSON('/api/sniper/detected?limit=10'), fetchJSON('/api/sniper/buys?limit=5'), fetchJSON('/api/sniper/status'), fetchJSON('/api/sniper/positions')])
+    .then(([detected, buys, status, positions]) => {
       l.push('')
-      if (status) { l.push(`<span class="dim">${JSON.stringify(status)}</span>`); l.push('') }
+      if (status) {
+        const s = status
+        const ab = s.autoBuy?.sol ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
+        const as = s.autoSell?.sol ? `<span class="cyan">ON (${s.sellTargets?.sol || 25}%)</span>` : '<span class="dim">OFF</span>'
+        l.push(`<span class="dim">active=${s.active?.sol} wallet=${sa(s.wallets?.sol||'')} autobuy=${ab} autosell=${as} buys=${s.autoBuyCounts?.sol||0}</span>`)
+        l.push('')
+      }
+      if (positions && Object.keys(positions).length > 0) {
+        l.push(tRow(`POSITIONS (${Object.keys(positions).length})`))
+        for (const [addr, pos] of Object.entries(positions)) {
+          const age = pos.ts ? Math.floor((Date.now() - pos.ts) / 1000) + 's' : '?'
+          l.push(`\u2551 <span class="ca gold" data-addr="${esc(addr)}">${sa(addr)}</span> ${pos.amount||'?'} ${pos.chain||'sol'} ${age.padStart(6)} \u2551`)
+        }
+        l.push(bRow())
+      }
       if (detected?.length > 0) {
-        l.push(tRow(`DETECTED (${detected.length})`)); l.push(`<span class="bold">\u2551  SYMBOL    MC          LIQ         SCORE  RUG              \u2551</span>`)
+        l.push(tRow(`DETECTED (${detected.length})`)); l.push(`<span class="bold">\u2551  SYMBOL    ADDR                                       \u2551</span>`)
         for (const d of detected) {
-          const rugWarn = d.rugFlagged ? ' <span class="error">\u2622</span>' : ''
-          l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${fiat(d.mc||0).padEnd(10)} ${fiat(d.liq||0).padEnd(11)} ${(d.score||'?').toString().padEnd(6)} ${(d.rugReason||''+rugWarn).padEnd(16)} \u2551`)
+          l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${sa(d.address).padEnd(45)} \u2551`)
         }
         l.push(bRow())
       }
       if (buys?.length > 0) {
         l.push(tRow('BUYS'))
-        for (const b of buys) { const ok = b.success ? '<span class="cyan">OK</span>' : '<span class="error">FAIL</span>'; l.push(`\u2551  ${ok} ${sa(b.token||'')} ${(b.result?.amount||b.amount||'')}                    \u2551`) }
+        for (const b of buys) {
+          const ok = b.success ? '<span class="cyan">OK</span>' : '<span class="error">FAIL</span>'
+          const addr = sa(b.token||b.result?.tokenAddress||'')
+          const amt = b.amount || b.result?.amount || ''
+          l.push(`\u2551  ${ok} ${addr} ${amt}                                   \u2551`)
+        }
         l.push(bRow())
       }
       l.push(''); l.push('<div id="sniper-log" style="color:#2a5a2a">Log will appear here when detector runs.</div>'); content.innerHTML = l.join('\n'); bindCA()
@@ -348,6 +365,7 @@ function sniperConnectSSE() {
     if (!log) return
     if (d.type === 'log') log.innerHTML = esc(d.msg) + '<br>' + log.innerHTML.substring(0, 2000)
     else if (d.type === 'detected' && d.token) log.innerHTML = `<span class="gold">DETECTED ${d.token.symbol||''}</span><br>` + log.innerHTML.substring(0, 2000)
+    else if (d.type === 'buy') log.innerHTML = `<span class="cyan">BUY ${d.result?.success ? 'OK' : 'FAIL'}</span><br>` + log.innerHTML.substring(0, 2000)
   }
   sniperEs.onerror = () => { sniperEs.close(); setTimeout(sniperConnectSSE, 2000) }
 }
@@ -389,27 +407,45 @@ async function postJSON(url, body) {
   try { const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); return await r.json() } catch { return null }
 }
 
+function logToSniper(msg) {
+  const log = document.getElementById('sniper-log')
+  if (log) log.innerHTML = esc(msg) + '<br>' + log.innerHTML.substring(0, 2000)
+}
+
+// Strategy state for cycling
+let currentStrategy = 0
+const STRATEGIES = ['manual', 'conservative', 'aggressive']
+
 document.addEventListener('keydown', e => {
   const m={F1:0,F2:1,F3:2,F4:3,F5:4,F6:5,F7:6,F8:7}; if(e.key in m){e.preventDefault();switchTab(m[e.key])}
   if(e.key==='Tab'){e.preventDefault();input.focus()}; if(e.key==='q'&&!e.ctrlKey)window.close(); if(e.key==='Escape')input.focus()
 
   // Factory tab shortcuts
   if (activeTab === 6) {
-    if (e.key === '1') { e.preventDefault(); postJSON('/api/factory/setup').then(r => { const log = document.getElementById('factory-log'); if (log) log.innerHTML = (r?.ok ? 'Wallets created' : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '2') { e.preventDefault(); const pk = prompt('Wallet private key to fund from:'); if (pk) postJSON('/api/factory/fund', { fromPk: pk }).then(r => { const log = document.getElementById('factory-log'); if (log) log.innerHTML = (r?.ok ? 'Funding started' : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '3') { e.preventDefault(); const input = prompt('Cycles (e.g. 3):'); if (input) postJSON('/api/factory/run', { cycles: parseInt(input) || 3, mainAddress: '' }).then(r => { const log = document.getElementById('factory-log'); if (log) log.innerHTML = (r?.ok ? 'Running ' + input + ' cycles' : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '4') { e.preventDefault(); fetch('/api/factory/balances').then(r=>r.json()).then(r => { const log = document.getElementById('factory-log'); if (log) log.innerHTML = JSON.stringify(r) + '<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '5') { e.preventDefault(); const addr = prompt('Sweep to address:'); if (addr) postJSON('/api/factory/sweep', { toAddress: addr }).then(r => { const log = document.getElementById('factory-log'); if (log) log.innerHTML = (r?.ok ? 'Swept ' + r.total : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
+    if (e.key === '1') { e.preventDefault(); postJSON('/api/factory/setup').then(r => logToFactory(r?.ok ? 'Wallets created' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '2') { e.preventDefault(); const pk = prompt('Wallet private key to fund from:'); if (pk) postJSON('/api/factory/fund', { fromPk: pk }).then(r => logToFactory(r?.ok ? 'Funding started' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '3') { e.preventDefault(); const input = prompt('Cycles (e.g. 3):'); if (input) postJSON('/api/factory/run', { cycles: parseInt(input) || 3, mainAddress: '' }).then(r => logToFactory(r?.ok ? 'Running ' + input + ' cycles' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '4') { e.preventDefault(); fetch('/api/factory/balances').then(r=>r.json()).then(r => logToFactory(JSON.stringify(r))) }
+    if (e.key === '5') { e.preventDefault(); const addr = prompt('Sweep to address:'); if (addr) postJSON('/api/factory/sweep', { toAddress: addr }).then(r => logToFactory(r?.ok ? 'Swept ' + r.total : 'Error: ' + (r?.error || '?'))) }
   }
 
   // Sniper tab shortcuts
   if (activeTab === 7) {
-    if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: 'sol' }).then(r => { const log = document.getElementById('sniper-log'); if (log) log.innerHTML = (r?.ok ? 'Solana detector started' : 'Error: ' + (r?.error || '?')) + '<br>' + (log ? log.innerHTML.substring(0, 2000) : '') }) }
-    if (e.key === '2') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => { const log = document.getElementById('sniper-log'); if (log) log.innerHTML = 'Detectors stopped<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '3') { e.preventDefault(); const addr = prompt('Solana wallet address:'); if (addr) postJSON('/api/sniper/wallet', { chain: 'sol', address: addr }).then(r => { const log = document.getElementById('sniper-log'); if (log) log.innerHTML = (r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
-    if (e.key === '4') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: 'sol', enabled: true }).then(r => { const log = document.getElementById('sniper-log'); if (log) log.innerHTML = (r?.ok ? 'Auto-buy enabled' : 'Error: ' + (r?.error || '?')) + '<br>' + log.innerHTML.substring(0, 2000) }) }
+    if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: 'sol' }).then(r => logToSniper(r?.ok ? 'Solana detector started' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '2') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
+    if (e.key === '3') { e.preventDefault(); const addr = prompt('Solana wallet address:'); if (addr) postJSON('/api/sniper/wallet', { chain: 'sol', address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '4') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: 'sol', enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: 'sol', enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '6') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % STRATEGIES.length; const s = STRATEGIES[currentStrategy]; postJSON('/api/sniper/strategy', { chain: 'sol', strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: 'sol' }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
   }
 })
+
+function logToFactory(msg) {
+  const log = document.getElementById('factory-log')
+  if (log) log.innerHTML = esc(msg) + '<br>' + log.innerHTML.substring(0, 2000)
+}
+
 $('tabs').addEventListener('click', e=>{const t=e.target.closest('.tab');if(t)switchTab(parseInt(t.dataset.tab))})
 $('chain-select').addEventListener('change', ()=>{updateUI();switchTab(activeTab)})
 input.addEventListener('keydown', e=>{if(e.key==='Enter')handleSubmit()})

@@ -1,15 +1,20 @@
-const { execSync } = require('child_process')
+const { exec } = require('child_process')
 const path = require('path')
 
 const CHAINS = ['sol', 'bsc', 'base', 'eth', 'robinhood']
 const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
 
-function run(args) {
-  try {
+function runAsync(args) {
+  return new Promise((resolve) => {
     const cmd = `node "${GMGN_CLI}" ${args.join(' ')} --raw`
-    return execSync(cmd, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
-  } catch { return '' }
+    exec(cmd, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }, (err, stdout) => {
+      if (err) return resolve('')
+      try { resolve(JSON.parse(stdout.trim())) }
+      catch { resolve('') }
+    })
+  })
 }
+
 function parse(out) { try { return JSON.parse(out) } catch { return null } }
 
 const P = parseFloat
@@ -25,7 +30,6 @@ const PATTERNS = [
   { id: 'LIQUIDITY_INJECT',     label: 'Liq Add',      weight: 15, cat: 'bullish' },
   { id: 'PRE_BOND_RUN',         label: 'Pre-Bond Run', weight: 22, cat: 'bullish' },
   { id: 'SNIPER_TARGET',        label: 'Sniper',       weight: 35, cat: 'bullish' },
-
   { id: 'BUNDLE_LAUNCH',        label: 'Bundle',       weight: -50, cat: 'bearish' },
   { id: 'RUG_SCAM',             label: 'Rug',          weight: -100, cat: 'bearish' },
   { id: 'DEV_DUMP',             label: 'DevDump',      weight: -60, cat: 'bearish' },
@@ -43,8 +47,6 @@ const PATTERNS = [
   { id: 'ZERO_SMART_MONEY',     label: 'NoSmartMoney', weight: -20, cat: 'bearish' },
 ]
 const PAT_MAP = Object.fromEntries(PATTERNS.map(p => [p.id, p]))
-
-// ── Feature extraction per token ──
 
 function features(t) {
   return {
@@ -98,7 +100,6 @@ function features(t) {
     buyingPressure: null,
     volToLiq: null,
   }
-  // computed after
 }
 
 function computeDerived(f) {
@@ -108,126 +109,63 @@ function computeDerived(f) {
   return f
 }
 
-// ── Pattern Detectors ──
-
 function detectPatterns(f) {
   const active = []
-
-  // ── Bearish / Rug Patterns ──
-
-  // 1. Bundle Launch: high bundler + bot + dev holds nothing
   if (f.bundler > 0.3 && f.bot > 0.3 && f.devHold < 0.05 && f.creatorClose)
     active.push(PAT_MAP.BUNDLE_LAUNCH)
-
-  // 2. Rug Scam: high rug ratio + creator closed + bot dominated
   if (f.rug > 0.3 && (f.creatorClose || f.bot > 0.5))
     active.push(PAT_MAP.RUG_SCAM)
-
-  // 3. Honeypot detection
   if (f.isHoneypot)
     active.push(PAT_MAP.HONEYPOT)
-
-  // 4. Wash Trading: suspicious volume patterns
   if (f.isWash || (f.volToLiq !== null && f.volToLiq > 10 && f.holders < 50 && f.botCount > f.holders))
     active.push(PAT_MAP.WASH_TRADING)
-
-  // 5. Sniper Dump: high snipers + price dropping
   if (f.sniperCount >= 5 && f.priceChange < -20)
     active.push(PAT_MAP.SNIPER_DUMP)
-
-  // 6. Top Heavy: top 10 holds > 50%
   if (f.top10 > 0.5)
     active.push(PAT_MAP.TOP_HEAVY)
-
-  // 7. Bot Dominated: bots > 50% of activity
   if (f.bot > 0.5 && f.smart < 1)
     active.push(PAT_MAP.BOT_DOMINATED)
-
-  // 8. Insider Ring: high bundler + top10 + devHold together
   if (f.bundler > 0.2 && f.top10 > 0.4 && f.devHold > 0.1 && !f.creatorClose)
     active.push(PAT_MAP.INSIDER_RING)
-
-  // 9. Fresh Wallet Dump: high fresh_wallet_rate + price dropping
   if (f.freshWallet > 0.2 && f.priceChange < -30)
     active.push(PAT_MAP.FRESH_WALLET_DUMP)
-
-  // 10. Entrapment: high entrapment ratio
   if (f.entrap > 0.1)
     active.push(PAT_MAP.ENTRAPMENT)
-
-  // 11. Creator Resume Holding (dev still holds bags)
   if (f.devHold > 0.05 && !f.creatorClose)
     active.push(PAT_MAP.CREATOR_RESUME)
-
-  // 12. Mint Not Renounced
   if (!f.renounced)
     active.push(PAT_MAP.MINT_NOT_RENOUNCED)
-
-  // 13. Social Dup / copycat token
   if (f.imageDup > 5 || f.webDup > 5 || f.twitterDup > 5)
     active.push({ ...PAT_MAP.RUG_SCAM, weight: -40, id: 'COPYCAT', label: 'Copycat' })
-
-  // 14. DEV_SNIPER_RUG: dev-launched + dev-bundled + dev-sniped extraction
-  //     Creator is also the sniper. Bundler wallets, zero smart money, dev closed,
-  //     mint renounced (false safety signal), snipers present, price dumping.
   if (f.bundler > 0 && f.smart === 0 && f.creatorClose && f.renounced && f.sniperCount >= 3 && f.priceChange <= 0)
     active.push(PAT_MAP.DEV_SNIPER_RUG)
-
-  // 15. Zero Smart Money — no smart wallets touched it (milder warning)
   if (f.smart === 0 && f.holders > 10 && !active.some(p => p.id === 'DEV_SNIPER_RUG'))
     active.push(PAT_MAP.ZERO_SMART_MONEY)
-
-  // ── Bullish / Alpha Patterns ──
-
-  // 14. Smart Money Accumulation
   if (f.smart >= 3 && f.renCount >= 1 && f.rug < 0.15 && f.bundler < 0.2 && f.bot < 0.3 && f.mc > 5000 && f.mc < 200000)
     active.push(PAT_MAP.SMART_MONEY_ACCUM)
-
-  // 15. Momentum Spike
   if (f.priceChange > 100 && f.volToLiq !== null && f.volToLiq > 0.5 && f.rug < 0.2 && f.bot < 0.4 && f.swaps > 100)
     active.push(PAT_MAP.MOMENTUM_SPIKE)
-
-  // 16. CTO Setup: dev out + renounced + community forming
   if (f.creatorClose && f.renounced && f.freezeRenounced && f.top10 < 0.3 && f.smart > 0 && f.mc < 100000 && f.rug < 0.1 && f.entrap < 0.05)
     active.push(PAT_MAP.CTO_CANDIDATE)
-
-  // 17. Bonding Curve Gradient (pre-Raydium migration)
   if (f.mc < 60000 && f.age < 600 && f.creatorClose && f.renounced && f.rug < 0.1 && f.devHold < 0.01)
     active.push(PAT_MAP.BONDING_GRAD)
-
-  // 18a. Sniper Target: fresh pre-bond curve token, clean security, smart interest
   if (f.age < 600 && f.mc < 30000 && f.rug < 0.05 && !f.isHoneypot && f.renounced && f.bundler < 0.2 && f.bot < 0.3 && f.migratable !== null && f.migratable < 0.8 && f.smart > 0 && f.creatorClose)
     active.push(PAT_MAP.SNIPER_TARGET)
-
-  // 18. Pre-Bond Run: nearing 100% on bonding curve + volume picking up
-    if (f.migratable !== null && f.migratable > 0.7 && f.volume > 5000 && f.rug < 0.1 && f.creatorClose)
+  if (f.migratable !== null && f.migratable > 0.7 && f.volume > 5000 && f.rug < 0.1 && f.creatorClose)
     active.push(PAT_MAP.PRE_BOND_RUN)
-
-  // 19. Hot Search Surge
   if (f.priceChange > 50 && f.volume > 10000 && f.liq > 5000 && f.smart + f.renCount > 0 && f.rug < 0.2 && f.swaps > 50)
     active.push(PAT_MAP.HOT_SEARCH_SURGE)
-
-  // 20. Whale Reload (smart money re-buying)
   if (f.smart >= 2 && f.rug < 0.1 && f.priceChange > -30 && f.priceChange < 50 && f.age < 1800)
     active.push(PAT_MAP.WHALE_RELOAD)
-
-  // 21. KOL Endorsement
   if (f.renCount >= 2 && f.smart >= 1 && f.priceChange > 0 && f.rug < 0.1)
     active.push(PAT_MAP.KOL_PUMP)
-
-  // 22. Liquidity Injection (progress increasing without dump)
   if (f.migratable !== null && f.migratable > 0.3 && f.priceChange > -10 && f.priceChange < 100 && f.volume > 2000)
     active.push(PAT_MAP.LIQUIDITY_INJECT)
-
   return active
 }
 
-// ── Risk Scoring ──
-
 function computeScore(t, patterns) {
   let score = 50
-
-  // risk factors
   if (t.rug > 0.3) score -= 30; else if (t.rug > 0.1) score -= 10
   if (t.entrap > 0.1) score -= 25
   if (t.bundler > 0.3) score -= 15; else if (t.bundler > 0.15) score -= 5
@@ -242,8 +180,6 @@ function computeScore(t, patterns) {
   if (t.isHoneypot) score -= 50
   if (t.isWash) score -= 30
   if (t.imageDup > 5 || t.webDup > 5) score -= 10
-
-  // quality factors
   if (t.creatorClose) score += 10
   if (t.renounced && t.freezeRenounced) score += 5
   if (t.smart >= 5) score += 20; else if (t.smart >= 3) score += 15; else if (t.smart >= 1) score += 5
@@ -251,30 +187,18 @@ function computeScore(t, patterns) {
   if (t.holders > 200) score += 8; else if (t.holders > 50) score += 4; else if (t.holders > 10) score += 2
   if (t.hasSocial) score += 3
   if (t.twitterFollowers > 1000) score += 5
-
-  // momentum factors
   if (t.volToLiq !== null && t.volToLiq > 2) score += 10
   if (t.buyingPressure !== null && t.buyingPressure > 0.3) score += 8
-  if (t.age > 0 && t.age < 180) score += 12 // <3 min — first mover
+  if (t.age > 0 && t.age < 180) score += 12
   else if (t.age > 0 && t.age < 600) score += 8
   if (t.priceChange > 100) score += 5; else if (t.priceChange > 30) score += 2
   if (t.priceChange1m > 20) score += 3
-
-  // pattern boost
   for (const p of patterns) score += p.weight
-
-  // liquidity health
   if (t.liq > 50000) score += 5; else if (t.liq > 10000) score += 2
   else if (t.liq < 1000 && t.mc > 0) score -= 5
-
-  // platform risk
-  if (t.launchpad.includes('pump') || t.launchpad.includes('Pump')) score += 0 /* baseline */
   if (t.launchpad.includes('mayhem')) score -= 15
-
   return Math.max(0, Math.min(100, Math.round(score)))
 }
-
-// ── Scanners ──
 
 function scanTrenches(chain, tokens) {
   const signals = []
@@ -334,33 +258,26 @@ function scanSmartMoney(chain, trades) {
   return signals
 }
 
-function scanChain(chain) {
+async function scanChain(chain) {
+  const [tData, hData, rData, sData] = await Promise.all([
+    runAsync(['market', 'trenches', '--chain', chain, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '50']),
+    runAsync(['market', 'hot-searches', '--chain', chain, '--interval', '5m', '--limit', '30']),
+    runAsync(['market', 'trending', '--chain', chain, '--interval', '5m', '--order-by', 'volume', '--limit', '30']),
+    runAsync(['track', 'smartmoney', '--chain', chain, '--limit', '30']),
+  ])
+
   const all = []
-  const tOut = run(['market', 'trenches', '--chain', chain, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '50'])
-  const tData = parse(tOut)
   if (tData) all.push(...scanTrenches(chain, tData.data?.new_creation || tData.data?.pump || []))
-
-  const hOut = run(['market', 'hot-searches', '--chain', chain, '--interval', '5m', '--limit', '30'])
-  const hData = parse(hOut)
   if (hData && Array.isArray(hData)) all.push(...scanHotSearch(chain, hData[0]?.tokens || []))
-
-  const rOut = run(['market', 'trending', '--chain', chain, '--interval', '5m', '--order-by', 'volume', '--limit', '30'])
-  const rData = parse(rOut)
   if (rData) all.push(...scanTrending(chain, rData.data?.rank || []))
-
-  const sOut = run(['track', 'smartmoney', '--chain', chain, '--limit', '30'])
-  const sData = parse(sOut)
   if (sData) all.push(...scanSmartMoney(chain, sData.list || []))
-
   return all
 }
 
-// ── Public ──
-
-function getSignals(chain = '') {
+async function getSignals(chain = '') {
   const chains = chain ? [chain] : CHAINS
-  let allSignals = []
-  for (const c of chains) allSignals.push(...scanChain(c))
+  const results = await Promise.all(chains.map(c => scanChain(c)))
+  let allSignals = results.flat()
 
   const merged = new Map()
   for (const s of allSignals) {
@@ -380,7 +297,7 @@ function getSignals(chain = '') {
     }
   }
 
-  const results = []
+  const output = []
   for (const [key, signal] of merged) {
     const tok = signal.token
     const f = signal.feat || computeDerived(features(tok))
@@ -388,7 +305,7 @@ function getSignals(chain = '') {
     if (score > 30) {
       const hasPos = signal.patterns.some(p => p.cat === 'bullish')
       if (!hasPos && score < 50) continue
-      results.push({
+      output.push({
         chain: signal.chain,
         address: tok.address || tok.token_address || tok.pool_address || '',
         symbol: tok.symbol || '',
@@ -412,8 +329,8 @@ function getSignals(chain = '') {
     }
   }
 
-  results.sort((a, b) => b.score - a.score)
-  return results
+  output.sort((a, b) => b.score - a.score)
+  return output
 }
 
 module.exports = { getSignals, PATTERNS, CHAINS }
