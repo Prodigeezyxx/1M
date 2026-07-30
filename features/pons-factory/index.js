@@ -126,4 +126,4 @@ function extractNum(args, flag) {
   return i !== -1 ? parseInt(args[i + 1]) : null
 }
 
-main().catch(console.error)
+if (require.main === module) main().catch(console.error)

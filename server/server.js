@@ -1,5 +1,5 @@
 const express = require('express')
-const { execSync } = require('child_process')
+const { execSync, exec } = require('child_process')
 const path = require('path')
 const { getSignals } = require('../signal-engine/index.js')
 const app = express()
@@ -12,6 +12,15 @@ function run(args) {
     const cmd = `gmgn-cli ${args.join(' ')} --raw 2>NUL`
     return execSync(cmd, { encoding: 'utf-8', timeout: 15000, shell: 'pwsh.exe' }).trim()
   } catch { return '' }
+}
+
+function runAsync(args) {
+  return new Promise((resolve) => {
+    const cmd = `gmgn-cli ${args.join(' ')} --raw 2>NUL`
+    exec(cmd, { encoding: 'utf-8', timeout: 15000, shell: 'pwsh.exe', windowsHide: true }, (err, stdout) => {
+      resolve(err ? '' : stdout.trim())
+    })
+  })
 }
 
 function parse(out) { try { return JSON.parse(out) } catch { return null } }
@@ -53,32 +62,32 @@ function broadcastAll(changedType, changedChain) {
 
 // ── Workers ──
 
-function pollTrending(chain) {
-  const out = run(['market', 'trending', '--chain', chain, '--interval', '5m', '--order-by', 'volume', '--limit', '30'])
+async function pollTrending(chain) {
+  const out = await runAsync(['market', 'trending', '--chain', chain, '--interval', '5m', '--order-by', 'volume', '--limit', '30'])
   const d = parse(out)
   if (d?.data?.rank) { cache.trending[chain] = d.data.rank; broadcastAll('trending', chain) }
 }
 
-function pollTrenches(chain) {
-  const out = run(['market', 'trenches', '--chain', chain, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '40'])
+async function pollTrenches(chain) {
+  const out = await runAsync(['market', 'trenches', '--chain', chain, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '40'])
   const d = parse(out)
   const tokens = d?.data?.new_creation || d?.data?.pump || []
   if (tokens.length) { cache.trenches[chain] = tokens; broadcastAll('trenches', chain) }
 }
 
-function pollSmartMoney(chain) {
-  const out = run(['track', 'smartmoney', '--chain', chain, '--limit', '30'])
+async function pollSmartMoney(chain) {
+  const out = await runAsync(['track', 'smartmoney', '--chain', chain, '--limit', '30'])
   const d = parse(out)
   if (d?.list) { cache.smartMoney[chain] = d.list; broadcastAll('smartMoney', chain) }
 }
 
-function pollKol(chain) {
-  const out = run(['track', 'kol', '--chain', chain, '--limit', '30'])
+async function pollKol(chain) {
+  const out = await runAsync(['track', 'kol', '--chain', chain, '--limit', '30'])
   const d = parse(out)
   if (d?.list) { cache.kol[chain] = d.list; broadcastAll('kol', chain) }
 }
 
-function pollSignals(chain) {
+async function pollSignals(chain) {
   try {
     const sigs = getSignals(chain === 'all' ? '' : chain)
     if (sigs.length) { cache.signals[chain] = sigs; broadcastAll('signals', chain) }
@@ -87,10 +96,9 @@ function pollSignals(chain) {
 
 function startWorker(fn, label, chain) {
   const loop = () => {
-    try { fn(chain) } catch {}
-    setTimeout(loop, 200) // 200ms stagger, each finishes at its own pace
+    fn(chain).catch(() => {}).then(() => setTimeout(loop, 200))
   }
-  loop()
+  setTimeout(loop, 100)
 }
 
 function startPollers() {
@@ -107,9 +115,7 @@ function startPollers() {
   }
 }
 
-startPollers()
-
-// ── REST endpoints (fallback) ──
+// ── REST endpoints ──
 
 function q(s) { return s || 'sol' }
 
@@ -209,7 +215,7 @@ app.get('/api/stream', (req, res) => {
 
 // ── Factory API ──────────────────────────────────────────────────────
 
-const factory = require('../features/pons-factory/index.js')
+const factory = require('../features/pons-factory/server-adapter.js').getAdapter()
 app.get('/api/factory/stream', (req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' })
   const onLog = (msg) => { try { res.write(`data: ${JSON.stringify({ type: 'log', msg })}\n\n`) } catch {} }
@@ -222,11 +228,11 @@ app.get('/api/factory/stream', (req, res) => {
   req.on('close', () => { factory.removeListener('log', onLog); factory.removeListener('cycle', onCycle); factory.removeListener('done', onDone); factory.removeListener('status', onStatus); clearInterval(keepalive) })
 })
 
-app.post('/api/factory/setup', (req, res) => { try { const r = factory.setup(); res.json(r) } catch (e) { res.json({ ok: false, error: e.message }) } })
-app.post('/api/factory/fund', express.json(), (req, res) => { try { const r = factory.fund(req.body.fromPk); res.json(r) } catch (e) { res.json({ ok: false, error: e.message }) } })
-app.post('/api/factory/run', express.json(), (req, res) => { try { factory.run(req.body.cycles, req.body.mainAddress); res.json({ ok: true }) } catch (e) { res.json({ ok: false, error: e.message }) } })
-app.get('/api/factory/balances', (req, res) => { try { const b = factory.getBalances(); res.json({ ok: true, balances: b }) } catch (e) { res.json({ ok: false, error: e.message }) } })
-app.post('/api/factory/sweep', express.json(), (req, res) => { try { const r = factory.sweep(req.body.toAddress); res.json(r) } catch (e) { res.json({ ok: false, error: e.message }) } })
+app.post('/api/factory/setup', async (req, res) => { try { const r = await factory.setup(); res.json({ ok: true, wallets: r }) } catch (e) { res.json({ ok: false, error: e.message }) } })
+app.post('/api/factory/fund', express.json(), async (req, res) => { try { const r = await factory.fund(req.body.fromPk); res.json({ ok: true }) } catch (e) { res.json({ ok: false, error: e.message }) } })
+app.post('/api/factory/run', express.json(), async (req, res) => { try { factory.run(req.body.cycles, req.body.mainAddress); res.json({ ok: true }) } catch (e) { res.json({ ok: false, error: e.message }) } })
+app.get('/api/factory/balances', async (req, res) => { try { const b = await factory.getBalances(); res.json({ ok: true, balances: b }) } catch (e) { res.json({ ok: false, error: e.message }) } })
+app.post('/api/factory/sweep', express.json(), async (req, res) => { try { const r = await factory.sweep(req.body.toAddress); res.json({ ok: true, total: String(r) }) } catch (e) { res.json({ ok: false, error: e.message }) } })
 app.get('/api/factory/status', (req, res) => { res.json(factory.getStatus()) })
 
 // ── Sniper API ──────────────────────────────────────────────────────
@@ -273,6 +279,8 @@ app.post('/api/sniper/autobuy', express.json(), (req, res) => {
 app.get('/api/sniper/status', (req, res) => { res.json(sniper.getStatus()) })
 app.get('/api/sniper/detected', (req, res) => { res.json(sniper.getRecentDetected(parseInt(req.query.limit) || 30)) })
 app.get('/api/sniper/buys', (req, res) => { res.json(sniper.getRecentBuys(parseInt(req.query.limit) || 20)) })
+
+startPollers()
 
 app.listen(PORT, () => {
   console.log(`GMGN Terminal Web → http://localhost:${PORT}`)
