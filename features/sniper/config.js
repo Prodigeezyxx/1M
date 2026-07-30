@@ -18,8 +18,8 @@ const CONFIG = {
   robinhood: {
     rpc: process.env.ROBINHOOD_RPC || '',
     wss: process.env.ROBINHOOD_WSS || '',
-    ponsFactory: process.env.PONS_FACTORY || '0x0000000000000000000000000000000000000000',
-    currency: '0x0bd7d308f8e1639fab988df18a8011f41eacad73', // WETH
+    ponsFactory: process.env.PONS_FACTORY || '0x5c6fdf3883c80555c5c2a1a99897d01b2e311a13',
+    currency: '0x0000000000000000000000000000000000000000', // native ETH
     currencyDecimals: 18,
     buyAmount: '0.02',
     maxSlippage: 20,

@@ -259,7 +259,7 @@ app.post('/api/sniper/buy', express.json(), (req, res) => {
   // Use gmgn-cli directly for custom amount buys
   try {
     const rawAmt = String(Math.floor(parseFloat(amount) * (chain === 'sol' ? 1e9 : 1e18)))
-    const quoteToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0bd7d308f8e1639fab988df18a8011f41eacad73'
+    const quoteToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0000000000000000000000000000000000000000'
     const out = execSync(`node "${GMGN_CLI}" swap --chain ${chain} --from ${wallet} --input-token ${quoteToken} --output-token ${tokenAddress} --amount ${rawAmt} --auto-slippage --yes`, { encoding: 'utf-8', timeout: 20000, maxBuffer: 2*1024*1024 }).trim()
     sniper.emit('log', `[BUY] ${tokenAddress.slice(0, 10)}.. ${amount} ${chain === 'sol' ? 'SOL' : 'ETH'}`)
     sniper.buys.unshift({ success: true, token: tokenAddress, amount, chain, result: parse(out) || out })

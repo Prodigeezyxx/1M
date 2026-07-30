@@ -68,7 +68,7 @@ async function processSell(chain, tokenAddress, sellProceedsNative, walletAddres
   }
 
   const usdcAddr = CONFIG.usdc[chain]
-  const nativeToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0bd7d308f8e1639fab988df18a8011f41eacad73'
+  const nativeToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0000000000000000000000000000000000000000'
 
   log(`  swapping ${protectedAmt} to USDC...`)
   const result = gmgnSwap(chain, walletAddress, nativeToken, usdcAddr, String(protectedAmt), log)
