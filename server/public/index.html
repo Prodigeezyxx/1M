@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GMGN Terminal</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="top-bar">
+    <div id="top-left">
+      <span id="logo" class="logo">GMGN://</span>
+      <span id="time" class="time">00:00:00</span>
+    </div>
+    <div id="top-center">
+      <nav id="tabs"></nav>
+    </div>
+    <div id="top-right">
+      <select id="chain-select">
+        <option value="sol">SOL</option>
+        <option value="bsc">BSC</option>
+        <option value="base">BASE</option>
+        <option value="eth">ETH</option>
+        <option value="robinhood">ROBIN</option>
+        <option value="all">ALL</option>
+      </select>
+      <span id="conn" class="conn-off">●</span>
+      <span id="freshness" class="dim">0s</span>
+    </div>
+  </div>
+
+  <div id="main">
+    <pre id="content"></pre>
+    <div id="loader" class="hidden">
+      <div class="spinner"></div>
+      <span>scanning...</span>
+    </div>
+  </div>
+
+  <div id="bottom-bar">
+    <span id="prompt" class="prompt">⏩</span>
+    <input id="input" type="text" placeholder="sol:ADDR | portfolio ADDR | help" spellcheck="false" autofocus>
+    <span id="status" class="dim"></span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
