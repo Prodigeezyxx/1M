@@ -360,6 +360,10 @@ async function renderSniper() {
     const ab = s.autoBuy?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
     const as = s.autoSell?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
     const w = s.wallets?.[c] || ''
+    // Auto-set wallet from API binding if not set
+    if (!w && balanceData?.wallet) {
+      postJSON('/api/sniper/wallet', { chain: c, address: balanceData.wallet })
+    }
     const isActive = s.active?.[c]
     const wSet = w.length > 0
     l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(28)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} \u2551`)
@@ -368,7 +372,8 @@ async function renderSniper() {
     if (balanceData) {
       const bal = parseFloat(balanceData.balance || 0)
       const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
-      l.push(`\u2551 <span class="${bal > 0 ? 'cyan' : 'dim'}">${bal.toFixed(4)} ${sym}</span>${balanceData.totalValue ? ` | portfolio: $${balanceData.totalValue.toFixed(2)}` : ''}${' '.repeat(20)}\u2551`)
+      const boundWallet = balanceData.wallet || ''
+      l.push(`\u2551 <span class="${bal > 0 ? 'cyan' : 'dim'}">${bal.toFixed(4)} ${sym}</span> bound: ${sa(boundWallet)}${' '.repeat(10)}\u2551`)
     }
     l.push(`\u255c${'\u2550'.repeat(56)}\u255e`)
     l.push('')
