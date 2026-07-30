@@ -140,15 +140,16 @@ app.get('/api/portfolio/balance', (req, res) => {
   if (!req.query.wallet) return res.status(400).json({ error: 'missing wallet' })
   const c = q(req.query.chain)
   try {
-    const out = execSync(`node "${GMGN_CLI}" portfolio tokens --chain ${c} --wallet ${req.query.wallet} --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
+    const out = execSync(`node "${GMGN_CLI}" portfolio holdings --chain ${c} --wallet ${req.query.wallet} --limit 50 --hide-closed false --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
     const data = parse(out)
     const holdings = data?.list || []
-    // Native token is the chain currency (SOL for solana, WETH/ETH for robinhood)
     const native = c === 'sol'
       ? holdings.find(h => (h.symbol||'').toUpperCase() === 'SOL' || (h.token_address||'') === 'So11111111111111111111111111111111111111112')
       : holdings.find(h => (h.symbol||'').toUpperCase() === 'ETH' || (h.token_address||'') === '0x0bd7d308f8e1639fab988df18a8011f41eacad73' || (h.token_address||'') === '0x0000000000000000000000000000000000000000')
-    res.json({ balance: parseFloat(native?.balance || native?.amount || 0), symbol: c === 'sol' ? 'SOL' : 'ETH', raw: holdings })
-  } catch { res.json({ balance: 0, symbol: c === 'sol' ? 'SOL' : 'ETH', raw: [] }) }
+    const bal = parseFloat(native?.balance || native?.amount || 0)
+    const totalValue = holdings.reduce((s, h) => s + parseFloat(h.valueUsd || h.value || 0), 0)
+    res.json({ balance: bal, symbol: c === 'sol' ? 'SOL' : 'ETH', totalValue, raw: holdings.slice(0, 10) })
+  } catch { res.json({ balance: 0, symbol: c === 'sol' ? 'SOL' : 'ETH', totalValue: 0, raw: [] }) }
 })
 
 app.get('/api/config/check', (req, res) => {

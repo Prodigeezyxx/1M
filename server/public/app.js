@@ -360,12 +360,15 @@ async function renderSniper() {
     const ab = s.autoBuy?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
     const as = s.autoSell?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
     const w = s.wallets?.[c] || ''
-    l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(30)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} \u2551`)
-    l.push(`\u2551 active=${s.active?.[c]} wallet=${sa(w)} buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0} \u2551`)
+    const isActive = s.active?.[c]
+    const wSet = w.length > 0
+    l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(28)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} \u2551`)
+    l.push(`\u2551 ${isActive ? '<span class="cyan">RUNNING</span>' : '<span class="error">STOPPED — press [1] to start</span>'} wallet=${sa(w)} \u2551`)
+    l.push(`\u2551 buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0}${' '.repeat(30)} \u2551`)
     if (balanceData) {
       const bal = parseFloat(balanceData.balance || 0)
       const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
-      l.push(`\u2551 Balance: <span class="${bal > 0 ? 'cyan' : 'dim'}">${bal.toFixed(4)} ${sym}</span>${' '.repeat(30)}\u2551`)
+      l.push(`\u2551 <span class="${bal > 0 ? 'cyan' : 'dim'}">${bal.toFixed(4)} ${sym}</span>${balanceData.totalValue ? ` | portfolio: $${balanceData.totalValue.toFixed(2)}` : ''}${' '.repeat(20)}\u2551`)
     }
     l.push(`\u255c${'\u2550'.repeat(56)}\u255e`)
     l.push('')

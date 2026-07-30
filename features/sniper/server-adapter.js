@@ -81,7 +81,8 @@ class SniperServerAdapter extends EventEmitter {
       this.detected.unshift(token)
       this.detected = this.detected.slice(0, 200)
       this.emit('detected', token)
-      this.emit('log', `[${chain.toUpperCase()}] New: ${token.address.slice(0, 10)}..  ${token.name || token.symbol || ''}`)
+      const mcLabel = token.mc ? ` MC:$${token.mc}` : ''
+      this.emit('log', `[${chain.toUpperCase()}] New: ${token.address.slice(0, 10)}..  ${token.name || token.symbol || ''}${mcLabel}`)
 
       const filterResult = await filterToken(token, chain)
       if (!filterResult.pass) {
