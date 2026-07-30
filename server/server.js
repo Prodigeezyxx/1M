@@ -295,6 +295,45 @@ app.post('/api/sniper/sell-all', express.json(), (req, res) => {
   res.json({ ok: true, sold })
 })
 
+// ── Profit Protector API ───────────────────────────────────────────
+
+const protector = require('../features/profit-protector/index.js').getProtectorAdapter()
+
+app.get('/api/protector/stream', (req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+  const onLog = (m) => { try { res.write(`data: ${JSON.stringify({ type: 'log', msg: m })}\n\n`) } catch {} }
+  const onStatus = (s) => { try { res.write(`data: ${JSON.stringify({ type: 'status', ...s })}\n\n`) } catch {} }
+  const onBuyTracked = (d) => { try { res.write(`data: ${JSON.stringify({ type: 'buy-tracked', ...d })}\n\n`) } catch {} }
+  const onSellProcessed = (d) => { try { res.write(`data: ${JSON.stringify({ type: 'sell-processed', ...d })}\n\n`) } catch {} }
+  protector.on('log', onLog); protector.on('status', onStatus); protector.on('buy-tracked', onBuyTracked); protector.on('sell-processed', onSellProcessed)
+  res.write(`data: ${JSON.stringify({ type: 'status', ...protector.getStatus() })}\n\n`)
+  const keepalive = setInterval(() => res.write(':keepalive\n\n'), 15000)
+  req.on('close', () => { protector.removeListener('log', onLog); protector.removeListener('status', onStatus); protector.removeListener('buy-tracked', onBuyTracked); protector.removeListener('sell-processed', onSellProcessed); clearInterval(keepalive) })
+})
+
+app.post('/api/protector/enable', express.json(), (req, res) => {
+  const { chain, enabled } = req.body
+  if (!chain || !['sol','robinhood'].includes(chain)) return res.status(400).json({ error: 'chain must be sol or robinhood' })
+  protector.setEnabled(chain, enabled); res.json({ ok: true })
+})
+
+app.get('/api/protector/status', (req, res) => { res.json(protector.getStatus()) })
+
+// Sniper hooks — track buys/sells through protector
+sniper.on('buy-result', (result) => {
+  if (result?.success && result?.token) {
+    const chain = result.chain || 'sol'
+    const costNative = Math.floor(parseFloat(result.amount) * (chain === 'sol' ? 1e9 : 1e18))
+    protector.onBuy(chain, result.token, costNative)
+  }
+})
+sniper.on('sell-result', (result) => {
+  if (result?.success && result?.token) {
+    const wallet = sniper.wallets?.[result.chain || 'sol']
+    protector.onSell(result.chain || 'sol', result.token, result.proceeds || '0', wallet)
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`GMGN Terminal Web → http://localhost:${PORT}`)
   // Pre-warm signals cache asynchronously

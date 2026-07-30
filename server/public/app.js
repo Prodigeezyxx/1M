@@ -1,4 +1,4 @@
-const TABS = ['HUB', 'TRENCHES', 'TRADES', 'SIGNALS', 'TOKEN', 'PORTFOLIO', 'FACTORY', 'SNIPER']
+const TABS = ['HUB', 'TRENCHES', 'TRADES', 'SIGNALS', 'TOKEN', 'PORTFOLIO', 'FACTORY', 'SNIPER', 'PROTECTOR']
 let activeTab = 0
 let cachedData = { trending: [], trenches: [], smartMoney: [], kol: [], signals: [] }
 let portAddr = ''
@@ -75,7 +75,7 @@ function renderCurrentTab() {
     case 0: renderHub(); break; case 1: renderTrenches(); break; case 2: renderTrades(); break
     case 3: renderSignals(); break; case 4: if (lastTokenQuery) renderTokenSearch(lastTokenQuery); break
     case 5: if (portAddr) renderPortfolio(lastChain, portAddr); break
-    case 6: renderFactory(); break; case 7: renderSniper(); break
+    case 6: renderFactory(); break; case 7: renderSniper(); break; case 8: renderProtector(); break
   }
 }
 
@@ -494,7 +494,7 @@ function switchTab(idx) {
   switch (idx) {
     case 0: renderHub(); break; case 1: renderTrenches(); break; case 2: renderTrades(); break
     case 3: renderSignals(); break; case 4: renderTokenSearch(lastTokenQuery); break; case 5: renderPortfolio(chain(), portAddr); break
-    case 6: renderFactory(); break; case 7: renderSniper(); break
+    case 6: renderFactory(); break; case 7: renderSniper(); break; case 8: renderProtector(); break
   }
 }
 
@@ -521,7 +521,7 @@ function handleSubmit() {
 }
 
 function showHelp() {
-  content.innerHTML = `\n\n  <span class="bold">GMGN TERMINAL v2</span>\n\n  <span class="gold">F1-F8</span> Tabs  <span class="gold">Tab</span> Focus  <span class="gold">q</span> Close\n  Click any symbol \u2192 copy CA to clipboard\n\n  <span class="cyan">sol:ADDR</span>  Token lookup\n  <span class="cyan">portfolio ADDR</span>  Wallet (uses active chain)\n  <span class="cyan">help</span>  This\n\n  <span class="gold">F1 HUB</span>: Sniper targets + Pre-bond + New launches + Trending + SM + Alpha\n  <span class="gold">F2 TRENCHES</span>: All new creations\n  <span class="gold">F3 TRADES</span>: Whale + KOL trade feed\n  <span class="gold">F4 SIGNALS</span>: 22 pattern detectors + risk scoring\n  <span class="gold">F5 TOKEN</span>: Deep research\n  <span class="gold">F6 PORTFOLIO</span>: Wallet P&L\n  <span class="gold">F7 FACTORY</span>: PONS Token Factory (P&D on Robinhood ETH)\n  <span class="gold">F8 SNIPER</span>: Real-time detector + buy/sell (uses chain selector)\n\n  <span class="dim">Chain selector changes all tabs. SNIPER uses selected chain.</span>`
+  content.innerHTML = `\n\n  <span class="bold">GMGN TERMINAL v2</span>\n\n  <span class="gold">F1-F8</span> Tabs  <span class="gold">Tab</span> Focus  <span class="gold">q</span> Close\n  Click any symbol \u2192 copy CA to clipboard\n\n  <span class="cyan">sol:ADDR</span>  Token lookup\n  <span class="cyan">portfolio ADDR</span>  Wallet (uses active chain)\n  <span class="cyan">help</span>  This\n\n  <span class="gold">F1 HUB</span>: Sniper targets + Pre-bond + New launches + Trending + SM + Alpha\n  <span class="gold">F2 TRENCHES</span>: All new creations\n  <span class="gold">F3 TRADES</span>: Whale + KOL trade feed\n  <span class="gold">F4 SIGNALS</span>: 22 pattern detectors + risk scoring\n  <span class="gold">F5 TOKEN</span>: Deep research\n  <span class="gold">F6 PORTFOLIO</span>: Wallet P&L\n  <span class="gold">F7 FACTORY</span>: PONS Token Factory (P&D on Robinhood ETH)\n  <span class="gold">F8 SNIPER</span>: Real-time detector + buy/sell (uses chain selector)\n  <span class="gold">F9 PROTECTOR</span>: Auto-send 50% of profits to vault wallet\n\n  <span class="dim">Chain selector changes all tabs. SNIPER uses selected chain.</span>`
 }
 
 async function postJSON(url, body) {
@@ -533,10 +533,93 @@ function logToSniper(msg) {
   if (log) log.innerHTML = esc(msg) + '<br>' + log.innerHTML.substring(0, 2000)
 }
 
+// ── Profit Protector ────────────────────────────────────────────────
+
+let protectorLogs = []
+let protectorStatus = {}
+let protectorEs = null
+
+function protectorConnectSSE() {
+  if (protectorEs) protectorEs.close()
+  protectorEs = new EventSource('/api/protector/stream')
+  protectorEs.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data)
+      if (d.type === 'log') {
+        protectorLogs.push(d.msg)
+        if (activeTab === 8) renderProtector()
+      } else if (d.type === 'status') {
+        protectorStatus = d
+        if (activeTab === 8) renderProtector()
+      } else if (d.type === 'buy-tracked' || d.type === 'sell-processed') {
+        if (activeTab === 8) renderProtector()
+      }
+    } catch {}
+  }
+  protectorEs.onerror = () => { protectorEs.close(); setTimeout(protectorConnectSSE, 2000) }
+}
+
+async function protectorPost(endpoint, body) {
+  return fetch('/api/protector/' + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(r => r.json()).catch(() => null)
+}
+
+async function toggleProtector(chain, enabled) {
+  const r = await protectorPost('enable', { chain, enabled })
+  if (!r?.ok) { status.textContent = 'protector error'; setTimeout(() => status.textContent = '', 1500) }
+  renderProtector()
+}
+
+function renderProtector() {
+  const s = protectorStatus.stats || {}
+  const lines = ['']
+  const title = '\u2554\u2556 PROFIT PROTECTOR \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557'
+
+  lines.push(title)
+  lines.push('\u2551  Auto-swap <span class="gold">50%</span> of every profitable trade to <span class="cyan">USDC</span> (stays in wallet)          \u2551')
+
+  // SOL panel
+  const solEn = protectorStatus.enabled?.sol ? '<span class="error">\u25a0 ON</span>' : '<span class="cyan">\u25b6 OFF</span>'
+  lines.push('\u255c\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255e')
+  lines.push('\u2551  <span class="gold">SOLANA</span>  ' + solEn + '  → USDC via gmgn-cli swap                          \u2551')
+  lines.push('\u2551  <span class="cyan" onclick="toggleProtector(\'sol\',true)">[ENABLE]</span>  <span class="error" onclick="toggleProtector(\'sol\',false)">[DISABLE]</span>                                              \u2551')
+
+  // ROBIN panel
+  const rhEn = protectorStatus.enabled?.robinhood ? '<span class="error">\u25a0 ON</span>' : '<span class="cyan">\u25b6 OFF</span>'
+  lines.push('\u2551                                                                                    \u2551')
+  lines.push('\u2551  <span class="gold">ROBINHOOD</span>  ' + rhEn + '  → USDC via gmgn-cli swap                       \u2551')
+  lines.push('\u2551  <span class="cyan" onclick="toggleProtector(\'robinhood\',true)">[ENABLE]</span>  <span class="error" onclick="toggleProtector(\'robinhood\',false)">[DISABLE]</span>                                              \u2551')
+
+  // Stats
+  const totalProfit = '$' + Number(s.totalProfitUsd || 0).toFixed(2)
+  const totalProtected = '$' + Number(s.totalProtectedUsd || 0).toFixed(2)
+  lines.push('\u2551                                                                                    \u2551')
+  lines.push('\u2551  Trades: <span class="gold">' + (s.totalTrades || 0) + '</span>  |  Protected: <span class="cyan">' + (s.protectedTrades || 0) + '</span>  \u2551')
+  lines.push('\u2551  Pending: ' + (s.pendingTrades || 0) + '  |  Profit: <span class="gold">' + totalProfit + '</span>  |  Saved: <span class="cyan">' + totalProtected + '</span>  \u2551')
+
+  // Log
+  lines.push('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d')
+  lines.push('')
+  lines.push(tRow('PROTECTOR LOG'))
+  const vis = protectorLogs.slice(-12)
+  if (vis.length === 0) {
+    lines.push('  <span class="dim">Enable the protector and make trades to see activity.</span>')
+  } else {
+    for (const msg of vis) {
+      const colored = esc(msg)
+        .replace(/USDC saved|OK|profit|protected|→ USDC/gi, m => '<span class="cyan">' + m + '</span>')
+        .replace(/error|FAIL|skip|not profitable|swap failed/gi, m => '<span class="error">' + m + '</span>')
+      lines.push('  ' + colored)
+    }
+  }
+  lines.push(bRow())
+
+  content.innerHTML = lines.join('\n')
+}
+
 let currentStrategy = 1 // default to snipe
 
 document.addEventListener('keydown', e => {
-  const m={F1:0,F2:1,F3:2,F4:3,F5:4,F6:5,F7:6,F8:7}; if(e.key in m){e.preventDefault();switchTab(m[e.key])}
+  const m={F1:0,F2:1,F3:2,F4:3,F5:4,F6:5,F7:6,F8:7,F9:8}; if(e.key in m){e.preventDefault();switchTab(m[e.key])}
   if(e.key==='Tab'){e.preventDefault();input.focus()}; if(e.key==='q'&&!e.ctrlKey)window.close(); if(e.key==='Escape')input.focus()
 
   // Factory tab shortcuts
@@ -578,6 +661,6 @@ input.addEventListener('keydown', e=>{if(e.key==='Enter')handleSubmit()})
 let pollStart = Date.now()
 
 fetchJSON('/api/sniper/strategies').then(s => { availableStrategies = s })
-checkConn(); updateUI(); switchTab(0); factoryConnectSSE(); sniperConnectSSE(); setInterval(updateUI,1000); input.focus()
+checkConn(); updateUI(); switchTab(0); factoryConnectSSE(); sniperConnectSSE(); protectorConnectSSE(); setInterval(updateUI,1000); input.focus()
 setInterval(refreshAll, 8000)
 refreshAll()
