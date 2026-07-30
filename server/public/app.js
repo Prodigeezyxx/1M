@@ -23,6 +23,15 @@ function esc(s) { const d=document.createElement('div'); d.textContent=s; return
 function tRow(t) { const l='\u2550'.repeat(Math.max(2,54-t.length)); return `<span class="bold">\u2554\u2556 ${t} ${l}\u2557</span>` }
 function bRow() { return `<span class="bold">\u255a${'\u2550'.repeat(56)}\u255d</span>` }
 
+function mcBar(mc, ath) {
+  const pct = ath > 0 ? Math.min(100, (mc / ath) * 100) : 0
+  const filled = Math.round(pct / 4)
+  const empty = 25 - filled
+  const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(Math.max(0, empty))
+  const color = pct > 80 ? 'cyan' : pct > 40 ? 'gold' : 'dim'
+  return `<span class="${color}">${bar}</span> <span class="dim">${pct.toFixed(0)}%</span>`
+}
+
 function copyCA(addr, el) {
   if (!addr) return
   navigator.clipboard.writeText(addr).then(() => {
@@ -140,13 +149,15 @@ function renderHub() {
   l.push(tRow('\u03B1 ALPHA'))
   const alphas = sigs?.filter(s => s.score >= 70).slice(0, 12) || []
   if (alphas.length > 0) {
-    l.push(`<span class="bold">\u2551  SYMBOL    SCORE  PATTERNS                              \u2551</span>`)
+    l.push(`<span class="bold">\u2551  SYMBOL    SCORE  MC BAR                 ATH          AGE  P5M          \u2551</span>`)
     l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
     for (const a of alphas) {
       const sc = a.score >= 80 ? `<span class="cyan">${a.score}</span>` : `<span class="gold">${a.score}</span>`
-      const patterns = Array.isArray(a.patterns) ? a.patterns.join(', ') : a.patterns || ''
+      const ageStr = a.age > 0 ? ago(Date.now()/1e3 - a.age) : 'new'
+      const chg = a.priceChange != null ? (a.priceChange >= 0 ? `<span class="cyan">+${(a.priceChange*100).toFixed(1)}%</span>` : `<span class="error">${(a.priceChange*100).toFixed(1)}%</span>`) : '<span class="dim">-</span>'
+      const ath = a.ath || a.mc || 0
       const warn = a.rugRatio > 0.3 ? ' \u2622' : ''
-      l.push(`\u2551 <span class="ca" data-addr="${esc(a.address)}">${tr(a.symbol,8).padEnd(8)}</span> ${sc.toString().padEnd(6)} ${tr(patterns+warn,34).padEnd(36)} \u2551`)
+      l.push(`\u2551 <span class="ca" data-addr="${esc(a.address)}">${tr(a.symbol,8).padEnd(8)}</span> ${sc.toString().padEnd(6)} ${mcBar(a.mc, ath).padEnd(21)} ${fiat(ath).padEnd(9)} ${ageStr.padEnd(4)} ${chg.padEnd(10)}${warn} \u2551`)
     }
     l.push(bRow())
   }
@@ -230,9 +241,14 @@ function renderTokenSearch(q) {
     .then(([info, sec, rug]) => {
       let l = ['']
       const d = info?.data || info || {}
+      const ath = d.ath || d.history_highest_market_cap || d.mc || 0
+      const tokenAge = d.age || d.created_timestamp ? ago(d.created_timestamp || (Date.now()/1e3 - d.age)) : '?'
       l.push(tRow(`TOKEN ${sa(addr)}`)); l.push(`\u2551  Symbol        ${d.symbol||'?'}                                          \u2551`)
       l.push(`\u2551  Name          ${tr(d.name||'?', 40)}                              \u2551`)
       l.push(`\u2551  MC            ${fiat(d.mc||d.marketCap||0).padEnd(40)}                              \u2551`)
+      l.push(`\u2551  MC Bar        ${mcBar(d.mc||d.marketCap||0, ath).padEnd(40)}                              \u2551`)
+      l.push(`\u2551  ATH           ${fiat(ath).padEnd(40)}                              \u2551`)
+      l.push(`\u2551  Age           ${tokenAge.padEnd(40)}                              \u2551`)
       l.push(`\u2551  Liq           ${fiat(d.liquidity||d.liq||0).padEnd(40)}                              \u2551`)
       l.push(`\u2551  Price         ${'$'+(d.price||'?')}                                       \u2551`)
       if (rug) {
@@ -246,7 +262,7 @@ function renderTokenSearch(q) {
         l.push(`\u2551  Renounced     ${s.renounced ? '<span class="green">YES</span>' : '<span class="error">NO</span>'}                                           \u2551`)
         l.push(`\u2551  Top10         ${s.top10HolderPercent ? (s.top10HolderPercent+'%') : '-'}                                            \u2551`)
       }
-      l.push(bRow()); l.push('<span class="dim">  Click symbol \u2192 copy    |    Chain: '+c+'</span>'); content.innerHTML = l.join('\n')
+      l.push(bRow()); l.push(`<span class="dim">  Click symbol \u2192 copy    |    Chain: ${c}    |    Buy/Sell via F8 Sniper tab</span>`); content.innerHTML = l.join('\n')
     })
 }
 
@@ -304,57 +320,139 @@ function factoryConnectSSE() {
   factoryEs.onerror = () => { factoryEs.close(); setTimeout(factoryConnectSSE, 2000) }
 }
 
-function renderSniper() {
+async function renderSniper() {
+  const c = chain()
   let l = ['']
-  l.push(tRow('SNIPER'))
-  l.push(`\u2551  <span class="dim">Real-time token detector for Solana + Robinhood</span>           \u2551`)
+  l.push(tRow(`SNIPER [${c.toUpperCase()}]`))
+  l.push(`\u2551  <span class="dim">Real-time token detector for ${c}</span>                            \u2551`)
   l.push(bRow()); l.push('')
   l.push(tRow('CONTROLS'))
-  l.push(`\u2551  <span class="cyan">[1] Start SOL</span>    Start Solana detector                        \u2551`)
+  l.push(`\u2551  <span class="cyan">[1] Start ${c}</span>   Start detector on ${c}                     \u2551`)
   l.push(`\u2551  <span class="cyan">[2] Stop</span>         Stop all detectors                           \u2551`)
-  l.push(`\u2551  <span class="cyan">[3] Wallet ADDR</span>  Set Solana wallet address                    \u2551`)
+  l.push(`\u2551  <span class="cyan">[3] Wallet</span>       Set ${c} wallet address                      \u2551`)
   l.push(`\u2551  <span class="cyan">[4] Autobuy</span>      Toggle auto-buy                              \u2551`)
   l.push(`\u2551  <span class="cyan">[5] Autosell</span>     Toggle auto-sell                             \u2551`)
   l.push(`\u2551  <span class="cyan">[6] Strategy</span>     Cycle: manual / conservative / aggressive     \u2551`)
   l.push(`\u2551  <span class="cyan">[7] Sell All</span>     Sell all positions                            \u2551`)
   l.push(bRow())
-  Promise.all([fetchJSON('/api/sniper/detected?limit=10'), fetchJSON('/api/sniper/buys?limit=5'), fetchJSON('/api/sniper/status'), fetchJSON('/api/sniper/positions')])
-    .then(([detected, buys, status, positions]) => {
-      l.push('')
-      if (status) {
-        const s = status
-        const ab = s.autoBuy?.sol ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
-        const as = s.autoSell?.sol ? `<span class="cyan">ON (${s.sellTargets?.sol || 25}%)</span>` : '<span class="dim">OFF</span>'
-        l.push(`<span class="dim">active=${s.active?.sol} wallet=${sa(s.wallets?.sol||'')} autobuy=${ab} autosell=${as} buys=${s.autoBuyCounts?.sol||0}</span>`)
-        l.push('')
+
+  const [status, detected, buys, positions] = await Promise.all([
+    fetchJSON('/api/sniper/status'),
+    fetchJSON('/api/sniper/detected?limit=10'),
+    fetchJSON('/api/sniper/buys?limit=5'),
+    fetchJSON('/api/sniper/positions'),
+  ])
+  const wallet = status?.wallets?.[c]
+  const balanceData = wallet ? await fetchJSON(`/api/portfolio/balance?chain=${c}&wallet=${wallet}`) : null
+
+  l.push('')
+  if (status) {
+    const s = status
+    const ab = s.autoBuy?.[c] ? '<span class="cyan">ON</span>' : '<span class="dim">OFF</span>'
+    const as = s.autoSell?.[c] ? `<span class="cyan">ON (${s.sellTargets?.[c] || 25}%)</span>` : '<span class="dim">OFF</span>'
+    const w = s.wallets?.[c] || ''
+    l.push(`<span class="dim">active=${s.active?.[c]} wallet=${sa(w)} autobuy=${ab} autosell=${as} buys=${s.autoBuyCounts?.[c]||0}</span>`)
+    if (balanceData) {
+      const bal = parseFloat(balanceData.balance || 0)
+      const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
+      l.push(`<span class="${bal > 0 ? 'cyan' : 'dim'}">  Balance: ${bal.toFixed(4)} ${sym}</span>`)
+    }
+    l.push('')
+  }
+
+  l.push(tRow('BUY TOKEN'))
+  l.push(`\u2551  Enter token address below or click detected token                      \u2551`)
+  l.push(`\u2551  <input type="text" id="buy-addr" placeholder="Token address" style="width:50%"> \u2551`)
+  const curSym = c === 'sol' ? 'SOL' : 'ETH'
+  l.push(`\u2551  Amount: <span class="buy-btn" data-amt="0.1">[.1 ${curSym}]</span> <span class="buy-btn" data-amt="0.2">[.2 ${curSym}]</span> <span class="buy-btn" data-amt="0.3">[.3 ${curSym}]</span> <input type="text" id="buy-custom" placeholder="custom" style="width:60px"> \u2551`)
+  l.push(`\u2551  <span class="buy-btn" data-amt="custom" id="buy-execute">[EXECUTE BUY]</span>                     \u2551`)
+  l.push(bRow()); l.push('')
+
+  if (positions && Object.keys(positions).length > 0) {
+    l.push(tRow(`POSITIONS (${Object.keys(positions).length})`))
+    l.push(`<span class="bold">\u2551  ADDR                   AMOUNT  CHAIN  AGE    SELL               \u2551</span>`)
+    l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
+    for (const [addr, pos] of Object.entries(positions)) {
+      const age = pos.ts ? Math.floor((Date.now() - pos.ts) / 1000) + 's' : '?'
+      l.push(`\u2551 <span class="ca gold" data-addr="${esc(addr)}">${sa(addr).padEnd(22)}</span> ${(pos.amount||'?').padEnd(7)} ${(pos.chain||'').padEnd(6)} ${age.padStart(5)}  <span class="sell-btn" data-addr="${esc(addr)}" data-chain="${esc(pos.chain)}">[SELL]</span>     \u2551`)
+    }
+    l.push(bRow())
+  }
+
+  if (detected?.length > 0) {
+    l.push(tRow(`DETECTED (${detected.length})`))
+    l.push(`<span class="bold">\u2551  SYMBOL    ADDR                                      BUY                \u2551</span>`)
+    l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
+    for (const d of detected) {
+      l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${sa(d.address).padEnd(22)} <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.1">[.1]</span> <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.2">[.2]</span> <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.3">[.3]</span> \u2551`)
+    }
+    l.push(bRow())
+  }
+  if (buys?.length > 0) {
+    l.push(tRow('BUYS'))
+    for (const b of buys) {
+      const ok = b.success ? '<span class="cyan">OK</span>' : '<span class="error">FAIL</span>'
+      const addr = sa(b.token||b.result?.tokenAddress||'')
+      const amt = b.amount || b.result?.amount || ''
+      l.push(`\u2551  ${ok} ${addr} ${amt}                                   \u2551`)
+    }
+    l.push(bRow())
+  }
+  l.push(''); l.push('<div id="sniper-log" style="color:#2a5a2a">Log from detector.</div>'); content.innerHTML = l.join('\n'); bindSniperButtons(); bindCA()
+}
+
+function bindSniperButtons() {
+  // Buy preset buttons
+  document.querySelectorAll('.buy-btn').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation()
+      const addr = el.dataset.addr || document.getElementById('buy-addr')?.value?.trim()
+      if (!addr) { logToSniper('No token address'); return }
+      const amt = el.dataset.amt
+      const customInput = document.getElementById('buy-custom')
+      let finalAmt = amt
+      if (amt === 'custom' || amt === undefined) {
+        const cv = customInput?.value?.trim()
+        if (!cv) { logToSniper('Enter amount'); return }
+        finalAmt = parseFloat(cv)
+        if (!finalAmt || finalAmt <= 0) { logToSniper('Invalid amount'); return }
       }
-      if (positions && Object.keys(positions).length > 0) {
-        l.push(tRow(`POSITIONS (${Object.keys(positions).length})`))
-        for (const [addr, pos] of Object.entries(positions)) {
-          const age = pos.ts ? Math.floor((Date.now() - pos.ts) / 1000) + 's' : '?'
-          l.push(`\u2551 <span class="ca gold" data-addr="${esc(addr)}">${sa(addr)}</span> ${pos.amount||'?'} ${pos.chain||'sol'} ${age.padStart(6)} \u2551`)
-        }
-        l.push(bRow())
-      }
-      if (detected?.length > 0) {
-        l.push(tRow(`DETECTED (${detected.length})`)); l.push(`<span class="bold">\u2551  SYMBOL    ADDR                                       \u2551</span>`)
-        for (const d of detected) {
-          l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${sa(d.address).padEnd(45)} \u2551`)
-        }
-        l.push(bRow())
-      }
-      if (buys?.length > 0) {
-        l.push(tRow('BUYS'))
-        for (const b of buys) {
-          const ok = b.success ? '<span class="cyan">OK</span>' : '<span class="error">FAIL</span>'
-          const addr = sa(b.token||b.result?.tokenAddress||'')
-          const amt = b.amount || b.result?.amount || ''
-          l.push(`\u2551  ${ok} ${addr} ${amt}                                   \u2551`)
-        }
-        l.push(bRow())
-      }
-      l.push(''); l.push('<div id="sniper-log" style="color:#2a5a2a">Log will appear here when detector runs.</div>'); content.innerHTML = l.join('\n'); bindCA()
-    })
+      const c = chain()
+      postJSON('/api/sniper/buy', { chain: c, tokenAddress: addr, amount: String(finalAmt) }).then(r => {
+        logToSniper(r?.ok ? `Buy ${finalAmt} ${c === 'sol' ? 'SOL' : 'ETH'} of ${sa(addr)}` : `Buy failed: ${r?.error || '?'}`)
+      })
+    }
+  })
+  // Sell buttons
+  document.querySelectorAll('.sell-btn').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation()
+      const addr = el.dataset.addr
+      const ch = el.dataset.chain
+      if (!addr) return
+      postJSON('/api/sniper/sell', { chain: ch, tokenAddress: addr }).then(r => {
+        logToSniper(r?.ok !== false ? `Sold ${sa(addr)}` : `Sell failed: ${r?.error || '?'}`)
+        renderSniper()
+      })
+    }
+  })
+  // Buy execute button
+  const execBtn = document.getElementById('buy-execute')
+  if (execBtn) {
+    execBtn.onclick = () => {
+      const addr = document.getElementById('buy-addr')?.value?.trim()
+      if (!addr) { logToSniper('Enter token address'); return }
+      const customInput = document.getElementById('buy-custom')
+      const cv = customInput?.value?.trim()
+      if (!cv) { logToSniper('Enter amount in custom field'); return }
+      const amt = parseFloat(cv)
+      if (!amt || amt <= 0) { logToSniper('Invalid amount'); return }
+      const c = chain()
+      postJSON('/api/sniper/buy', { chain: c, tokenAddress: addr, amount: String(amt) }).then(r => {
+        logToSniper(r?.ok ? `Buy ${amt} ${c === 'sol' ? 'SOL' : 'ETH'} of ${sa(addr)}` : `Buy failed: ${r?.error || '?'}`)
+      })
+    }
+  }
 }
 
 let sniperEs = null
@@ -400,7 +498,7 @@ function handleSubmit() {
 }
 
 function showHelp() {
-  content.innerHTML = `\n\n  <span class="bold">GMGN TERMINAL v2</span>\n\n  <span class="gold">F1-F8</span> Tabs  <span class="gold">Tab</span> Focus  <span class="gold">q</span> Close\n  Click any symbol \u2192 copy CA to clipboard\n\n  <span class="cyan">sol:ADDR</span>  Token lookup\n  <span class="cyan">portfolio ADDR</span>  Wallet (uses active chain)\n  <span class="cyan">help</span>  This\n\n  <span class="gold">F1 HUB</span>: Sniper targets + Pre-bond + New launches + Trending + SM + Alpha\n  <span class="gold">F2 TRENCHES</span>: All new creations\n  <span class="gold">F3 TRADES</span>: Whale + KOL trade feed\n  <span class="gold">F4 SIGNALS</span>: 22 pattern detectors + risk scoring\n  <span class="gold">F5 TOKEN</span>: Deep research\n  <span class="gold">F6 PORTFOLIO</span>: Wallet P&L\n  <span class="gold">F7 FACTORY</span>: PONS Token Factory (P&D on Robinhood ETH)\n  <span class="gold">F8 SNIPER</span>: Real-time detector (Solana Pump.fun + Robinhood PONS)\n\n  <span class="dim">Polling REST API  |  22 detectors  |  v2</span>`
+  content.innerHTML = `\n\n  <span class="bold">GMGN TERMINAL v2</span>\n\n  <span class="gold">F1-F8</span> Tabs  <span class="gold">Tab</span> Focus  <span class="gold">q</span> Close\n  Click any symbol \u2192 copy CA to clipboard\n\n  <span class="cyan">sol:ADDR</span>  Token lookup\n  <span class="cyan">portfolio ADDR</span>  Wallet (uses active chain)\n  <span class="cyan">help</span>  This\n\n  <span class="gold">F1 HUB</span>: Sniper targets + Pre-bond + New launches + Trending + SM + Alpha\n  <span class="gold">F2 TRENCHES</span>: All new creations\n  <span class="gold">F3 TRADES</span>: Whale + KOL trade feed\n  <span class="gold">F4 SIGNALS</span>: 22 pattern detectors + risk scoring\n  <span class="gold">F5 TOKEN</span>: Deep research\n  <span class="gold">F6 PORTFOLIO</span>: Wallet P&L\n  <span class="gold">F7 FACTORY</span>: PONS Token Factory (P&D on Robinhood ETH)\n  <span class="gold">F8 SNIPER</span>: Real-time detector + buy/sell (uses chain selector)\n\n  <span class="dim">Chain selector changes all tabs. SNIPER uses selected chain.</span>`
 }
 
 async function postJSON(url, body) {
@@ -412,7 +510,6 @@ function logToSniper(msg) {
   if (log) log.innerHTML = esc(msg) + '<br>' + log.innerHTML.substring(0, 2000)
 }
 
-// Strategy state for cycling
 let currentStrategy = 0
 const STRATEGIES = ['manual', 'conservative', 'aggressive']
 
@@ -429,15 +526,16 @@ document.addEventListener('keydown', e => {
     if (e.key === '5') { e.preventDefault(); const addr = prompt('Sweep to address:'); if (addr) postJSON('/api/factory/sweep', { toAddress: addr }).then(r => logToFactory(r?.ok ? 'Swept ' + r.total : 'Error: ' + (r?.error || '?'))) }
   }
 
-  // Sniper tab shortcuts
+  // Sniper tab shortcuts (chain-aware)
   if (activeTab === 7) {
-    if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: 'sol' }).then(r => logToSniper(r?.ok ? 'Solana detector started' : 'Error: ' + (r?.error || '?'))) }
+    const c = chain()
+    if (e.key === '1') { e.preventDefault(); postJSON('/api/sniper/start', { chain: c }).then(r => logToSniper(r?.ok ? `${c} detector started` : 'Error: ' + (r?.error || '?'))) }
     if (e.key === '2') { e.preventDefault(); postJSON('/api/sniper/stop').then(r => logToSniper('Detectors stopped')) }
-    if (e.key === '3') { e.preventDefault(); const addr = prompt('Solana wallet address:'); if (addr) postJSON('/api/sniper/wallet', { chain: 'sol', address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
-    if (e.key === '4') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: 'sol', enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
-    if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: 'sol', enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
-    if (e.key === '6') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % STRATEGIES.length; const s = STRATEGIES[currentStrategy]; postJSON('/api/sniper/strategy', { chain: 'sol', strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
-    if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: 'sol' }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
+    if (e.key === '3') { e.preventDefault(); const addr = prompt(`${c} wallet address:`); if (addr) postJSON('/api/sniper/wallet', { chain: c, address: addr }).then(r => logToSniper(r?.ok ? 'Wallet set: ' + addr.slice(0,8)+'...' : 'Error: ' + (r?.error || '?'))) }
+    if (e.key === '4') { e.preventDefault(); postJSON('/api/sniper/autobuy', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-buy enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '5') { e.preventDefault(); postJSON('/api/sniper/autosell', { chain: c, enabled: true }).then(r => { logToSniper(r?.ok ? 'Auto-sell enabled' : 'Error'); renderSniper() }) }
+    if (e.key === '6') { e.preventDefault(); currentStrategy = (currentStrategy + 1) % STRATEGIES.length; const s = STRATEGIES[currentStrategy]; postJSON('/api/sniper/strategy', { chain: c, strategy: s }).then(r => { logToSniper(r?.ok ? 'Strategy: ' + s : 'Error'); renderSniper() }) }
+    if (e.key === '7') { e.preventDefault(); postJSON('/api/sniper/sell-all', { chain: c }).then(r => logToSniper(r?.ok ? 'Sold ' + (r.sold || 0) + ' positions' : 'Error')) }
   }
 })
 

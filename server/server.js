@@ -136,6 +136,21 @@ app.get('/api/portfolio/stats', (req, res) => {
   res.json(parse(out))
 })
 
+app.get('/api/portfolio/balance', (req, res) => {
+  if (!req.query.wallet) return res.status(400).json({ error: 'missing wallet' })
+  const c = q(req.query.chain)
+  try {
+    const out = execSync(`node "${GMGN_CLI}" portfolio tokens --chain ${c} --wallet ${req.query.wallet} --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
+    const data = parse(out)
+    const holdings = data?.list || []
+    // Native token is the chain currency (SOL for solana, WETH/ETH for robinhood)
+    const native = c === 'sol'
+      ? holdings.find(h => (h.symbol||'').toUpperCase() === 'SOL' || (h.token_address||'') === 'So11111111111111111111111111111111111111112')
+      : holdings.find(h => (h.symbol||'').toUpperCase() === 'ETH' || (h.token_address||'') === '0x0bd7d308f8e1639fab988df18a8011f41eacad73' || (h.token_address||'') === '0x0000000000000000000000000000000000000000')
+    res.json({ balance: parseFloat(native?.balance || native?.amount || 0), symbol: c === 'sol' ? 'SOL' : 'ETH', raw: holdings })
+  } catch { res.json({ balance: 0, symbol: c === 'sol' ? 'SOL' : 'ETH', raw: [] }) }
+})
+
 app.get('/api/config/check', (req, res) => {
   try { execSync(`node "${GMGN_CLI}" config --check`, { encoding: 'utf-8', timeout: 5000 }); res.json({ connected: true }) }
   catch { res.json({ connected: false }) }
@@ -223,6 +238,26 @@ app.get('/api/sniper/status', (req, res) => { res.json(sniper.getStatus()) })
 app.get('/api/sniper/detected', (req, res) => { res.json(sniper.getRecentDetected(parseInt(req.query.limit) || 30)) })
 app.get('/api/sniper/buys', (req, res) => { res.json(sniper.getRecentBuys(parseInt(req.query.limit) || 20)) })
 app.get('/api/sniper/positions', (req, res) => { res.json(sniper.getPositions()) })
+
+app.post('/api/sniper/buy', express.json(), (req, res) => {
+  const { chain, tokenAddress, amount } = req.body
+  if (!chain || !tokenAddress) return res.status(400).json({ error: 'missing chain or tokenAddress' })
+  if (!amount) return res.status(400).json({ error: 'missing amount' })
+  const wallet = sniper.wallets?.[chain]
+  if (!wallet) return res.status(400).json({ error: `no wallet set for ${chain}` })
+  // Use gmgn-cli directly for custom amount buys
+  try {
+    const quoteToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0bd7d308f8e1639fab988df18a8011f41eacad73'
+    const out = execSync(`node "${GMGN_CLI}" swap --chain ${chain} --from ${wallet} --input-token ${quoteToken} --output-token ${tokenAddress} --amount ${amount} --auto-slippage --yes`, { encoding: 'utf-8', timeout: 20000, maxBuffer: 2*1024*1024 }).trim()
+    sniper.emit('log', `[BUY] ${tokenAddress.slice(0, 10)}.. ${amount} ${chain === 'sol' ? 'SOL' : 'ETH'}`)
+    sniper.buys.unshift({ success: true, token: tokenAddress, amount, chain, result: parse(out) || out })
+    sniper.buys = sniper.buys.slice(0, 100)
+    sniper.positions[tokenAddress] = { chain, amount, ts: Date.now() }
+    res.json({ ok: true, result: parse(out) || out })
+  } catch (e) {
+    res.json({ ok: false, error: e.message })
+  }
+})
 
 app.post('/api/sniper/sell', express.json(), (req, res) => {
   const { chain, tokenAddress, percent } = req.body
