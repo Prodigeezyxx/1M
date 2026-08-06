@@ -1,11 +1,12 @@
 const EventEmitter = require('events')
-const { execSync, exec } = require('child_process')
 const path = require('path')
 const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
-const { filterToken, quickRugCheck } = require('./filter')
+const { execAsync, errorText } = require('./exec-util')
+const { filterToken } = require('./filter')
 const { startSolDetector } = require('./detector-sol')
 const { startEthDetector } = require('./detector-eth')
 const { executeBuy, executeSell } = require('./executor')
+const { checkSolMint } = require('./solana-safety')
 const { CONFIG } = require('./config')
 
 const STRATEGIES = {
@@ -14,6 +15,7 @@ const STRATEGIES = {
   scalp:  { label: 'Scalp',  sellTime: null, sellProfit: 10, stopLoss: 5,   trailPct: null, desc: '10% profit, -5% stop' },
   hold:   { label: 'Hold',   sellTime: null, sellProfit: 50, stopLoss: 15,  trailPct: 10,  desc: '50% profit, 10% trail' },
   razor:  { label: 'Razor',  sellTime: null, sellProfit: 50, stopLoss: 3, trailPct: null, desc: 'Hard 3% stop, profit target 50%' },
+  manual: { label: 'Manual', sellTime: null, sellProfit: null, stopLoss: null, trailPct: null, desc: 'No automatic execution' },
 }
 
 class SniperServerAdapter extends EventEmitter {
@@ -37,7 +39,7 @@ class SniperServerAdapter extends EventEmitter {
     this.recentDevs = new Map()  // devWallet -> [{ symbol, name, address, ts }]
     this.devCache = new Map()    // tokenAddress -> devWallet
     this.nameHistory = new Map() // name.lower -> ts (last 5 min)
-    this._devResolveQueue = []
+    this.executionBlocked = { sol: null, robinhood: null }
   }
 
   log(msg) { this.emit('log', String(msg)) }
@@ -49,23 +51,38 @@ class SniperServerAdapter extends EventEmitter {
   }
 
   setAutoBuy(chain, enabled) {
+    if (enabled && this.executionBlocked[chain]) {
+      this.log(`Auto-buy ${chain} blocked: ${this.executionBlocked[chain]}`)
+      return false
+    }
     this.autoBuy[chain] = enabled
     this.log(`Auto-buy ${chain}: ${enabled ? 'ON' : 'OFF'}`)
     this.emit('status', this.getStatus())
+    return true
   }
 
   setBuyAmount(chain, amount) {
     const num = parseFloat(amount)
     if (!num || num <= 0) { this.log(`Invalid buy amount: ${amount}`); return }
+    if (num > parseFloat(CONFIG[chain].maxBuyAmount)) {
+      this.log(`Buy amount exceeds ${chain} safety cap: ${CONFIG[chain].maxBuyAmount}`)
+      return false
+    }
     this.buyAmounts[chain] = String(num)
     this.log(`Buy amount for ${chain}: ${num}`)
     this.emit('status', this.getStatus())
+    return true
   }
 
   setAutoSell(chain, enabled, targetPct) {
     this.autoSell[chain] = enabled
     if (targetPct) this.sellTargets[chain] = targetPct
     this.log(`Auto-sell ${chain}: ${enabled ? 'ON at ' + (targetPct || this.sellTargets[chain]) + '%' : 'OFF'}`)
+    if (enabled) {
+      for (const [address, position] of Object.entries(this.positions)) {
+        if (position.chain === chain) this.watchPosition(chain, address)
+      }
+    }
     this.emit('status', this.getStatus())
   }
 
@@ -87,16 +104,18 @@ class SniperServerAdapter extends EventEmitter {
     this.active[chain] = true
 
     const onDetect = async (token) => {
+      // WebSocket events are the earliest possible signal, but they do not yet
+      // contain enough holder/liquidity/risk data for safe automatic execution.
+      if (token.source === 'ws') {
+        this.emit('log', `[SOL] Raw launch: ${token.address.slice(0, 10)}.. — awaiting enriched trench data`)
+        this.emit('raw-detected', token)
+        return false
+      }
+
       const key = token.address || token.signature
       if (this.seenTokens.has(key)) return
-      this.seenTokens.add(key)
-      if (this.seenTokens.size > 500) this.seenTokens.clear()
-
-      this.detected.unshift(token)
-      this.detected = this.detected.slice(0, 200)
-      this.emit('detected', token)
       const mcLabel = token.mc ? ` MC:$${token.mc}` : ''
-      this.emit('log', `[${chain.toUpperCase()}] New: ${token.address.slice(0, 10)}..  ${token.name || token.symbol || ''}${mcLabel}`)
+      this.emit('log', `[${chain.toUpperCase()}] Screening: ${token.address.slice(0, 10)}..  ${token.name || token.symbol || ''}${mcLabel}`)
 
       const filterResult = await filterToken(token, chain)
       if (!filterResult.pass) {
@@ -105,69 +124,45 @@ class SniperServerAdapter extends EventEmitter {
         this.emit('filtered', { token, reason: reasons })
         return
       }
-      this.emit('log', `  passed filters`)
 
-      // Safety checks from trenches data (no extra API calls)
-      if (token.is_honeypot === true || token.is_honeypot === 'true') {
-        this.emit('log', `  [HONEYPOT] ${token.symbol} — blocked`)
-        this.emit('filtered', { token, reason: 'honeypot' })
-        return
-      }
-      const rug = parseFloat(token.rug_ratio || 0)
-      if (rug > 0.5) {
-        this.emit('log', `  [RUG RISK] ${token.symbol} — rug_ratio ${rug}`)
-        this.emit('filtered', { token, reason: `rug_${rug}` })
-        return
-      }
-
-      this.resolveDev(token, chain)
-
+      await this.resolveDev(token, chain)
       const vc = this.isVampOrRename(token)
       if (vc) {
-        this.emit('log', `  [VAMP/${vc.reason}] ${token.symbol} → ${vc.match} (${vc.matchTs}s ago)`)
-        return
+        this.emit('log', `  [VAMP/${vc.reason}] ${token.symbol} → ${vc.match} (${vc.matchTs}s ago) — blocked`)
+        this.emit('filtered', { token, reason: vc.reason })
+        return false
       }
-      if (this.isMayhem(token)) {
-        this.emit('log', `  [MAYHEM] ${token.symbol} — AI agent has 1B extra supply, random walk trading`)
-        this.emit('filtered', { token, reason: 'mayhem_mode' })
-        return
-      }
+
       const nowS = Math.floor(Date.now() / 1e3)
       this.nameHistory.set((token.symbol || '').toLowerCase(), nowS)
       if (this.nameHistory.size > 500) this.nameHistory.clear()
 
-      this.runRugCheck(token.address, chain)
-
-      // Security check — run gmgn-cli token security to block honeypots and high-risk tokens
-      // Only on Robinhood (slower chain, safety > speed). Solana skips this — the
-      // lightweight filterToken + rug ratio checks run in <1ms and blocking execSync
-      // for 1-2s per token would freeze the event loop, missing subsequent detects.
-      if (chain !== 'sol') {
-        try {
-          const secOut = execSync(`node "${GMGN_CLI}" token security --chain ${chain} --address ${token.address} --raw`, { encoding: 'utf-8', timeout: 8000 }).trim()
-          const sec = JSON.parse(secOut)
-          if (sec.is_honeypot === true || sec.is_honeypot === 'true' || sec.honeypot === 1) {
-            this.emit('log', `  [SECURITY] ${token.symbol} — honeypot, blocked`)
-            this.emit('filtered', { token, reason: 'honeypot' })
-            return
-          }
-          const reasons = []
-          if (sec.is_open_source === false) reasons.push('source_not_verified')
-          if (sec.renounced === -1 || sec.renounced_mint === false || sec.renounced_freeze_account === false) reasons.push('not_renounced')
-          if (sec.lock_summary?.is_locked === false) reasons.push('liquidity_unlocked')
-          if (sec.can_sell === 0 || sec.can_not_sell === 1) reasons.push('cannot_sell')
-          if (sec.is_show_alert === true) reasons.push('gmgn_alert')
-          if (reasons.length > 0) {
-            this.emit('log', `  [SECURITY] ${token.symbol} — flags: ${reasons.join(', ')}`)
-          }
-        } catch {}
+      if (chain !== 'sol' && !(await this.checkEvmSecurity(token))) {
+        return false
       }
+      if (chain === 'sol') {
+        const mintSafety = await checkSolMint(token.address)
+        if (!mintSafety.pass) {
+          this.log(`  [SOL SECURITY] ${token.symbol} — blocked: ${mintSafety.reason}`)
+          this.emit('filtered', { token, reason: mintSafety.reason })
+          return false
+        }
+      }
+
+      this.seenTokens.add(key)
+      if (this.seenTokens.size > 500) this.seenTokens.clear()
+      token.vettedAt = Date.now()
+      this.detected.unshift(token)
+      this.detected = this.detected.slice(0, 200)
+      this.emit('detected', token)
+      this.emit('log', `  vetted candidate — passed execution gates`)
+      this.runRugCheck(token.address, chain).catch(() => {})
 
       if (this.autoBuy[chain] && this.wallets[chain]) {
         // Immediate profitability check for Razor: skip if price dropping
         if (this.strategy === 'razor') {
           try {
-            const out = execSync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${token.address} --raw`, { encoding: 'utf-8', timeout: 6000 }).trim()
+            const out = (await execAsync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${token.address} --raw`, { timeout: 6000 })).trim()
             const info = JSON.parse(out)
             const p1m = parseFloat(info?.price?.price_1m || 0)
             if (p1m <= 0) {
@@ -181,8 +176,9 @@ class SniperServerAdapter extends EventEmitter {
           }
         }
         this.emit('log', `  auto-buy...`)
-        this.executeBuyWithStrategy(chain, token)
+        this.executeBuyWithStrategy(chain, token).catch(err => this.log(`  buy pipeline error: ${err.message}`))
       }
+      return true
     }
 
     const onStatus = (status) => {
@@ -192,6 +188,7 @@ class SniperServerAdapter extends EventEmitter {
     if (chain === 'sol') {
       this.detectors.sol = startSolDetector(onDetect, onStatus)
       this.startPoller(chain, onDetect)
+      this.log(`Solana detector started (WebSocket visibility + vetted polling execution)`)
     } else if (chain === 'robinhood') {
       const det = startEthDetector(onDetect, onStatus)
       this.detectors.robinhood = det
@@ -200,12 +197,19 @@ class SniperServerAdapter extends EventEmitter {
     }
   }
 
-  executeBuyWithStrategy(chain, token) {
+  async executeBuyWithStrategy(chain, token) {
     const buyAmt = this.buyAmounts[chain] || CONFIG[chain].buyAmount
-    const result = executeBuy(chain, this.wallets[chain], token.address, (msg) => this.emit('log', msg), buyAmt)
+    const result = await executeBuy(chain, this.wallets[chain], token.address, (msg) => this.emit('log', msg), buyAmt)
     if (result) {
       this.buys.unshift(result)
       this.buys = this.buys.slice(0, 100)
+      if (result.authError) {
+        this.executionBlocked[chain] = 'AUTH_SIGNATURE_INVALID — private key does not authorize the bound wallet'
+        this.autoBuy[chain] = false
+        this.log(`  [CIRCUIT BREAKER] ${chain} auto-buy disabled: ${this.executionBlocked[chain]}`)
+        this.emit('status', this.getStatus())
+        return result
+      }
       if (result.success) {
         this.autoBuyCounts[chain]++
         const addr = token.address
@@ -216,23 +220,25 @@ class SniperServerAdapter extends EventEmitter {
         if (this.autoSell[chain]) this.watchPosition(chain, addr)
       }
     }
+    return result
   }
 
   watchPosition(chain, address) {
     const strat = this.getStrategyConfig()
     const wallet = this.wallets[chain]
     if (!wallet || !this.positions[address]) return
+    if (this._sellTimers[address]) clearTimeout(this._sellTimers[address])
 
-    const check = () => {
-      if (!this.active[chain] || !this.positions[address] || !this.autoSell[chain]) return
+    const check = async () => {
+      if (!this.positions[address] || !this.autoSell[chain]) return
       const pos = this.positions[address]
       const elapsed = (Date.now() - pos.ts) / 1000
 
       // Get current price
       try {
-        const out = execSync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${address} --raw`, { encoding: 'utf-8', timeout: 8000 }).trim()
+        const out = (await execAsync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${address} --raw`, { timeout: 8000 })).trim()
         const data = JSON.parse(out)
-        const price = parseFloat(data?.data?.price || data?.price || 0)
+        const price = parseFloat(data?.data?.price?.price || data?.price?.price || data?.data?.price || data?.price || 0)
         if (price <= 0) { this._sellTimers[address] = setTimeout(check, 5000); return }
 
         this.priceCache[address] = price
@@ -248,8 +254,8 @@ class SniperServerAdapter extends EventEmitter {
         // 1. Stop-loss
         if (strat.stopLoss !== null && gain <= -strat.stopLoss) {
           this.log(`  [STOP-LOSS ${strat.label}] ${address.slice(0, 10)}.. ${gain.toFixed(1)}% ≤ -${strat.stopLoss}%`)
-          const r = executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
-          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('buy-result', { ...r, type: 'sell', reason: 'stop-loss', profitPct: gain }); return }
+          const r = await executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
+          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('sell-result', { ...r, reason: 'stop-loss', profitPct: gain }); return }
         }
 
         // 2. Trailing stop
@@ -257,8 +263,8 @@ class SniperServerAdapter extends EventEmitter {
           const drawdown = pos.highWaterMark - gain
           if (drawdown >= strat.trailPct) {
             this.log(`  [TRAIL ${strat.label}] ${address.slice(0, 10)}.. high=${pos.highWaterMark.toFixed(1)}% drop=${drawdown.toFixed(1)}% ≥ ${strat.trailPct}%`)
-            const r = executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
-            if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('buy-result', { ...r, type: 'sell', reason: 'trailing-stop', profitPct: gain }); return }
+            const r = await executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
+            if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('sell-result', { ...r, reason: 'trailing-stop', profitPct: gain }); return }
           }
         }
 
@@ -266,15 +272,15 @@ class SniperServerAdapter extends EventEmitter {
         if (strat.sellTime !== null && elapsed >= strat.sellTime) {
           const msg = gain >= 0 ? `+${gain.toFixed(1)}%` : `${gain.toFixed(1)}%`
           this.log(`  [TIME ${strat.label}] ${address.slice(0, 10)}.. ${elapsed.toFixed(0)}s elapsed → selling (${msg})`)
-          const r = executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
-          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('buy-result', { ...r, type: 'sell', reason: 'time', profitPct: gain }); return }
+          const r = await executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
+          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('sell-result', { ...r, reason: 'time', profitPct: gain }); return }
         }
 
         // 4. Single profit target
         if (strat.sellProfit !== null && gain >= strat.sellProfit) {
           this.log(`  [PROFIT ${strat.label}] ${address.slice(0, 10)}.. +${gain.toFixed(1)}% ≥ ${strat.sellProfit}%`)
-          const r = executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
-          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('buy-result', { ...r, type: 'sell', reason: 'profit-target', profitPct: gain }); return }
+          const r = await executeSell(chain, wallet, address, (msg) => this.emit('log', msg))
+          if (r?.success) { delete this.positions[address]; clearTimeout(this._sellTimers[address]); this.emit('sell-result', { ...r, reason: 'profit-target', profitPct: gain }); return }
         }
 
       } catch {}
@@ -284,35 +290,56 @@ class SniperServerAdapter extends EventEmitter {
   }
 
   startPoller(chain, onDetect) {
-    const seen = new Set()
-    const poll = () => {
+    const checkedAt = new Map()
+    const poll = async () => {
       if (!this.active[chain]) return
+      let nextDelay = 10000
       try {
-        const out = execSync(`node "${GMGN_CLI}" market trenches --chain ${chain} --type new_creation --filter-preset safe --limit 20 --raw`, { encoding: 'utf-8', timeout: 10000 }).trim()
+        const filters = chain === 'sol'
+          ? '--type new_creation --type near_completion --filter-preset strict --max-rug-ratio 0.2 --max-bundler-rate 0.2 --max-insider-ratio 0.2 --min-holder-count 10 --min-progress 0.1 --min-volume-24h 1000 --min-smart-degen-count 1'
+          : '--type new_creation --filter-preset strict --min-holder-count 10 --min-volume-24h 1000'
+        const out = (await execAsync(`node "${GMGN_CLI}" market trenches --chain ${chain} ${filters} --limit 40 --raw`, { timeout: 15000 })).trim()
         const data = JSON.parse(out)
-        const tokens = data?.new_creation || data?.pump || []
+        const tokens = [...(data?.new_creation || []), ...(data?.pump || [])]
         for (const t of tokens) {
           const addr = t.address || t.mint || ''
-          const mc = parseFloat(t.market_cap || t.marketCap || t.mc || 0)
-          if (!addr || seen.has(addr)) continue
-          if (mc > 5000) continue
-          seen.add(addr)
-          if (seen.size > 1000) seen.clear()
-          onDetect({ chain, address: addr, name: t.name || t.symbol || '', symbol: t.symbol || '', mc, liq: parseFloat(t.liquidity || t.liq || 0), age: parseInt(t.created_timestamp) || t.age || 0, creator: t.creator || '', total_supply: t.total_supply, is_honeypot: t.is_honeypot, rug_ratio: t.rug_ratio, owner_renounced: t.owner_renounced, renounced_mint: t.renounced_mint, source: 'poll' })
+          if (!addr) continue
+          const lastCheck = checkedAt.get(addr) || 0
+          if (Date.now() - lastCheck < 30000) continue
+          checkedAt.set(addr, Date.now())
+          const accepted = await onDetect({
+            ...t,
+            chain,
+            address: addr,
+            name: t.name || t.symbol || '',
+            symbol: t.symbol || '',
+            mc: parseFloat(t.market_cap || t.usd_market_cap || 0),
+            liq: parseFloat(t.liquidity || 0),
+            age: parseInt(t.created_timestamp || 0),
+            creator: t.creator || '',
+            source: 'poll',
+          })
+          if (accepted) checkedAt.set(addr, Number.MAX_SAFE_INTEGER)
         }
-      } catch {}
-      setTimeout(poll, 2000)
+        if (checkedAt.size > 2000) checkedAt.clear()
+      } catch (err) {
+        const message = errorText(err)
+        nextDelay = /429|RATE_LIMIT/i.test(message) ? 60000 : 15000
+        this.log(`  ${chain} poll error — retrying in ${nextDelay / 1000}s: ${message.slice(0, 100)}`)
+      }
+      if (this.active[chain]) setTimeout(poll, nextDelay)
     }
     setTimeout(poll, 1000)
   }
 
-  resolveDev(token, chain) {
+  async resolveDev(token, chain) {
     let dev = token.creator || ''
     if (!dev && !this.devCache.has(token.address)) {
       try {
-        const out = execSync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${token.address} --raw`, { encoding: 'utf-8', timeout: 6000 }).trim()
-        const info = JSON.parse(out)?.data || JSON.parse(out) || {}
-        dev = info.creator || info.creator_address || info.deployer || info.authority || ''
+        const out = (await execAsync(`node "${GMGN_CLI}" token info --chain ${chain} --address ${token.address} --raw`, { timeout: 6000 })).trim()
+        const parsed = JSON.parse(out)
+        const info = parsed?.data || parsed || {}
+        dev = info.creator || info.creator_address || info.dev?.creator_address || info.deployer || info.authority || ''
       } catch {}
     }
     if (dev) {
@@ -323,6 +350,30 @@ class SniperServerAdapter extends EventEmitter {
       hist.push({ symbol: token.symbol, name: token.name, address: token.address, ts: now })
       if (hist.length > 20) hist.shift()
       if (token.creator) this.emit('log', `  dev: ${dev.slice(0, 8)}..`)
+    }
+  }
+
+  async checkEvmSecurity(token) {
+    try {
+      const out = await execAsync(`node "${GMGN_CLI}" token security --chain ${token.chain} --address ${token.address} --raw`, { timeout: 8000 })
+      const sec = JSON.parse(out.trim())
+      const reasons = []
+      if (sec.is_honeypot === true || sec.is_honeypot === 'true' || sec.honeypot === 1) reasons.push('honeypot')
+      if (sec.can_sell === 0 || sec.can_not_sell === 1) reasons.push('cannot_sell')
+      if (sec.is_open_source === false || sec.open_source === 0 || sec.open_source === 'no') reasons.push('source_not_verified')
+      if (sec.is_renounced === false || sec.renounced === -1 || sec.owner_renounced === 'no') reasons.push('not_renounced')
+      if (sec.lock_summary?.is_locked === false) reasons.push('liquidity_unlocked')
+      if (sec.is_show_alert === true) reasons.push('gmgn_alert')
+      if (reasons.length) {
+        this.log(`  [SECURITY] ${token.symbol} — blocked: ${reasons.join(', ')}`)
+        this.emit('filtered', { token, reason: reasons.join(',') })
+        return false
+      }
+      return true
+    } catch (err) {
+      this.log(`  [SECURITY] ${token.symbol} — blocked: security unavailable`)
+      this.emit('filtered', { token, reason: 'security_unavailable' })
+      return false
     }
   }
 
@@ -375,10 +426,6 @@ class SniperServerAdapter extends EventEmitter {
     if (!this.active[chain]) return
     this.log(`Stopping ${chain} detector...`)
     if (this.detectors[chain]) { this.detectors[chain].stop(); this.detectors[chain] = null }
-    // Clear sell timers
-    for (const [addr, timer] of Object.entries(this._sellTimers)) {
-      clearTimeout(timer); delete this._sellTimers[addr]
-    }
     this.active[chain] = false
     this.emit('status', this.getStatus())
   }
@@ -387,7 +434,7 @@ class SniperServerAdapter extends EventEmitter {
 
   async runRugCheck(address, chain) {
     try {
-      const out = execSync(`node "${GMGN_CLI}" token traders --chain ${chain} --address ${address} --limit 15 --order-by profit --direction desc --raw`, { encoding: 'utf-8', timeout: 10000 })
+      const out = await execAsync(`node "${GMGN_CLI}" token traders --chain ${chain} --address ${address} --limit 15 --order-by profit --direction desc --raw`, { timeout: 10000 })
       const data = JSON.parse(out.trim())
       const traders = data?.list || []
       const top = traders.filter(t => parseFloat(t.profit || 0) > 0).slice(0, 8)
@@ -413,6 +460,7 @@ class SniperServerAdapter extends EventEmitter {
       active: { ...this.active },
       wallets: { ...this.wallets },
       autoBuy: { ...this.autoBuy },
+      executionBlocked: { ...this.executionBlocked },
       autoSell: { ...this.autoSell },
       sellTargets: { ...this.sellTargets },
       autoBuyCounts: { ...this.autoBuyCounts },

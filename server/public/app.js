@@ -373,6 +373,9 @@ async function renderSniper() {
     l.push(`\u2551 <span class="cyan">STRAT</span> ${stratLabel.padEnd(20)} <span class="cyan">BUY</span> ${ab} <span class="cyan">SELL</span> ${as} <span class="cyan">AMT</span> ${buyAmt} \u2551`)
     l.push(`\u2551 ${isActive ? '<span class="cyan">RUNNING</span>' : '<span class="error">STOPPED — press [1] to start</span>'} wallet=${sa(w)} \u2551`)
     l.push(`\u2551 buys=${s.autoBuyCounts?.[c]||0} pos=${s.positions||0} amt=${buyAmt} ${c==='sol'?'SOL':'ETH'} ${' '.repeat(18)} \u2551`)
+    if (s.executionBlocked?.[c]) {
+      l.push(`\u2551 <span class="error">EXECUTION BLOCKED: ${esc(s.executionBlocked[c])}</span> \u2551`)
+    }
     if (balanceData) {
       const bal = parseFloat(balanceData.balance || 0)
       const sym = balanceData.symbol || (c === 'sol' ? 'SOL' : 'ETH')
@@ -387,7 +390,8 @@ async function renderSniper() {
   l.push(`\u2551  Enter token address below or click detected token                      \u2551`)
   l.push(`\u2551  <input type="text" id="buy-addr" placeholder="Token address" style="width:50%"> \u2551`)
   const curSym = c === 'sol' ? 'SOL' : 'ETH'
-  l.push(`\u2551  Amount: <span class="buy-btn" data-amt="0.1">[.1 ${curSym}]</span> <span class="buy-btn" data-amt="0.2">[.2 ${curSym}]</span> <span class="buy-btn" data-amt="0.3">[.3 ${curSym}]</span> <input type="text" id="buy-custom" placeholder="custom" style="width:60px"> \u2551`)
+  const presets = c === 'sol' ? ['0.01', '0.025', '0.05'] : ['0.001', '0.0025', '0.005']
+  l.push(`\u2551  Amount: ${presets.map(amt => `<span class="buy-btn" data-amt="${amt}">[${amt} ${curSym}]</span>`).join(' ')} <input type="text" id="buy-custom" placeholder="custom" style="width:60px"> \u2551`)
   l.push(`\u2551  <span class="buy-btn" data-amt="custom" id="buy-execute">[EXECUTE BUY]</span>                     \u2551`)
   l.push(bRow()); l.push('')
 
@@ -407,7 +411,7 @@ async function renderSniper() {
     l.push(`<span class="bold">\u2551  SYMBOL    ADDR                                      BUY                \u2551</span>`)
     l.push(`<span class="bold">\u255c${'\u2550'.repeat(56)}\u255e</span>`)
     for (const d of detected) {
-      l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${sa(d.address).padEnd(22)} <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.1">[.1]</span> <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.2">[.2]</span> <span class="buy-btn" data-addr="${esc(d.address)}" data-amt="0.3">[.3]</span> \u2551`)
+      l.push(`\u2551 <span class="ca gold" data-addr="${esc(d.address)}">${tr(d.symbol,8).padEnd(8)}</span> ${sa(d.address).padEnd(22)} ${presets.map(amt => `<span class="buy-btn" data-addr="${esc(d.address)}" data-amt="${amt}">[${amt}]</span>`).join(' ')} \u2551`)
     }
     l.push(bRow())
   }
@@ -454,7 +458,7 @@ function bindSniperButtons() {
       const ch = el.dataset.chain
       if (!addr) return
       postJSON('/api/sniper/sell', { chain: ch, tokenAddress: addr }).then(r => {
-        logToSniper(r?.ok !== false ? `Sold ${sa(addr)}` : `Sell failed: ${r?.error || '?'}`)
+        logToSniper(r?.success ? `Sold ${sa(addr)}` : `Sell failed: ${r?.error || '?'}`)
         renderSniper()
       })
     }
@@ -487,6 +491,7 @@ function sniperConnectSSE() {
     if (d.type === 'log') log.innerHTML = esc(d.msg) + '<br>' + log.innerHTML.substring(0, 2000)
     else if (d.type === 'detected' && d.token) log.innerHTML = `<span class="gold">DETECTED ${d.token.symbol||''}</span><br>` + log.innerHTML.substring(0, 2000)
     else if (d.type === 'buy') log.innerHTML = `<span class="cyan">BUY ${d.result?.success ? 'OK' : 'FAIL'}</span><br>` + log.innerHTML.substring(0, 2000)
+    else if (d.type === 'sell') log.innerHTML = `<span class="gold">SELL ${d.result?.success ? 'OK' : 'FAIL'}</span><br>` + log.innerHTML.substring(0, 2000)
   }
   sniperEs.onerror = () => { sniperEs.close(); setTimeout(sniperConnectSSE, 2000) }
 }
@@ -664,5 +669,5 @@ let pollStart = Date.now()
 
 fetchJSON('/api/sniper/strategies').then(s => { availableStrategies = s })
 checkConn(); updateUI(); switchTab(0); factoryConnectSSE(); sniperConnectSSE(); protectorConnectSSE(); setInterval(updateUI,1000); input.focus()
-setInterval(refreshAll, 8000)
+setInterval(refreshAll, 30000)
 refreshAll()

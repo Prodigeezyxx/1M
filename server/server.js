@@ -2,7 +2,8 @@ const express = require('express')
 const { execSync, exec } = require('child_process')
 const path = require('path')
 const { getSignals } = require('../signal-engine/index.js')
-const { executeSell } = require('../features/sniper/executor.js')
+const { executeBuy, executeSell } = require('../features/sniper/executor.js')
+const { CONFIG: SNIPER_CONFIG } = require('../features/sniper/config.js')
 const app = express()
 const PORT = 3001
 const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
@@ -13,6 +14,8 @@ function parse(out) { try { return JSON.parse(out) } catch { return null } }
 function q(s) { return s || 'sol' }
 
 const cache = {}
+const inFlight = new Set()
+let gmgnCooldownUntil = 0
 function getCached(key, ttlMs) {
   const entry = cache[key]
   if (entry && Date.now() - entry.ts < ttlMs) return entry.data
@@ -21,59 +24,56 @@ function getCached(key, ttlMs) {
 function setCache(key, data) { cache[key] = { data, ts: Date.now() } }
 
 function refreshAsync(args, cacheKey) {
+  if (Date.now() < gmgnCooldownUntil || inFlight.has(cacheKey)) return
+  inFlight.add(cacheKey)
   const cmd = `node "${GMGN_CLI}" ${args.join(' ')} --raw`
-  exec(cmd, { encoding: 'utf-8', timeout: 15000, maxBuffer: 2*1024*1024 }, (err, stdout) => {
+  exec(cmd, { encoding: 'utf-8', timeout: 15000, maxBuffer: 2*1024*1024 }, (err, stdout, stderr) => {
+    inFlight.delete(cacheKey)
     if (!err && stdout) setCache(cacheKey, stdout.trim())
+    if (err && /429|RATE_LIMIT/i.test(`${err.message} ${stderr}`)) {
+      const resetMatch = `${stderr}`.match(/resets at (.+?) \(/i)
+      const resetAt = resetMatch ? Date.parse(resetMatch[1]) : NaN
+      gmgnCooldownUntil = Number.isFinite(resetAt) ? resetAt : Date.now() + 60000
+    }
   })
 }
 
-function fetchOrRefresh(args, cacheKey, ttlMs, parser) {
+function fetchOrRefresh(args, cacheKey, ttlMs, parser, fallback = []) {
   const cached = getCached(cacheKey, ttlMs)
   if (cached !== undefined) return parser(cached)
   refreshAsync(args, cacheKey)
-  return null
+  const stale = cache[cacheKey]?.data
+  return stale !== undefined ? parser(stale) : fallback
 }
 
-const TTL = { trending: 20000, trenches: 20000, smartmoney: 30000, kol: 30000, signals: 120000 }
+const TTL = { trending: 60000, trenches: 60000, smartmoney: 90000, kol: 90000, signals: 120000 }
 
 app.get('/api/trending', (req, res) => {
   const c = q(req.query.chain)
   const key = `trending:${c}`
   const data = fetchOrRefresh(['market', 'trending', '--chain', c, '--interval', '5m', '--order-by', 'volume', '--limit', '30'], key, TTL.trending, out => parse(out)?.data?.rank || [])
-  if (data) return res.json(data)
-  const out = execSync(`node "${GMGN_CLI}" market trending --chain ${c} --interval 5m --order-by volume --limit 30 --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
-  if (out) setCache(key, out)
-  res.json(parse(out)?.data?.rank || [])
+  res.json(data)
 })
 
 app.get('/api/trenches', (req, res) => {
   const c = q(req.query.chain)
   const key = `trenches:${c}`
   const data = fetchOrRefresh(['market', 'trenches', '--chain', c, '--type', 'new_creation', '--filter-preset', 'safe', '--limit', '40'], key, TTL.trenches, out => { const d = parse(out); return d?.new_creation || d?.pump || [] })
-  if (data) return res.json(data)
-  const out = execSync(`node "${GMGN_CLI}" market trenches --chain ${c} --type new_creation --filter-preset safe --limit 40 --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
-  if (out) setCache(key, out)
-  const d = parse(out); res.json(d?.new_creation || d?.pump || [])
+  res.json(data)
 })
 
 app.get('/api/smartmoney', (req, res) => {
   const c = q(req.query.chain)
   const key = `smartmoney:${c}`
   const data = fetchOrRefresh(['track', 'smartmoney', '--chain', c, '--limit', '30'], key, TTL.smartmoney, out => parse(out)?.list || [])
-  if (data) return res.json(data)
-  const out = execSync(`node "${GMGN_CLI}" track smartmoney --chain ${c} --limit 30 --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
-  if (out) setCache(key, out)
-  res.json(parse(out)?.list || [])
+  res.json(data)
 })
 
 app.get('/api/kol', (req, res) => {
   const c = q(req.query.chain)
   const key = `kol:${c}`
   const data = fetchOrRefresh(['track', 'kol', '--chain', c, '--limit', '30'], key, TTL.kol, out => parse(out)?.list || [])
-  if (data) return res.json(data)
-  const out = execSync(`node "${GMGN_CLI}" track kol --chain ${c} --limit 30 --raw`, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }).trim()
-  if (out) setCache(key, out)
-  res.json(parse(out)?.list || [])
+  res.json(data)
 })
 
 app.get('/api/signals', async (req, res) => {
@@ -184,11 +184,12 @@ app.get('/api/sniper/stream', (req, res) => {
   const onDetected = (t) => { try { res.write(`data: ${JSON.stringify({ type: 'detected', token: t })}\n\n`) } catch {} }
   const onFiltered = (d) => { try { res.write(`data: ${JSON.stringify({ type: 'filtered', ...d })}\n\n`) } catch {} }
   const onBuy = (r) => { try { res.write(`data: ${JSON.stringify({ type: 'buy', result: r })}\n\n`) } catch {} }
+  const onSell = (r) => { try { res.write(`data: ${JSON.stringify({ type: 'sell', result: r })}\n\n`) } catch {} }
   const onStatus = (s) => { try { res.write(`data: ${JSON.stringify({ type: 'status', status: s })}\n\n`) } catch {} }
-  sniper.on('log', onLog); sniper.on('detected', onDetected); sniper.on('filtered', onFiltered); sniper.on('buy-result', onBuy); sniper.on('status', onStatus)
+  sniper.on('log', onLog); sniper.on('detected', onDetected); sniper.on('filtered', onFiltered); sniper.on('buy-result', onBuy); sniper.on('sell-result', onSell); sniper.on('status', onStatus)
   res.write(`data: ${JSON.stringify({ type: 'status', status: sniper.getStatus() })}\n\n`)
   const keepalive = setInterval(() => res.write(':keepalive\n\n'), 15000)
-  req.on('close', () => { sniper.removeListener('log', onLog); sniper.removeListener('detected', onDetected); sniper.removeListener('filtered', onFiltered); sniper.removeListener('buy-result', onBuy); sniper.removeListener('status', onStatus); clearInterval(keepalive) })
+  req.on('close', () => { sniper.removeListener('log', onLog); sniper.removeListener('detected', onDetected); sniper.removeListener('filtered', onFiltered); sniper.removeListener('buy-result', onBuy); sniper.removeListener('sell-result', onSell); sniper.removeListener('status', onStatus); clearInterval(keepalive) })
 })
 
 app.post('/api/sniper/start', express.json(), (req, res) => {
@@ -208,7 +209,9 @@ app.post('/api/sniper/wallet', express.json(), (req, res) => {
 
 app.post('/api/sniper/autobuy', express.json(), (req, res) => {
   if (!req.body.chain) return res.status(400).json({ error: 'missing chain' })
-  sniper.setAutoBuy(req.body.chain, req.body.enabled); res.json({ ok: true })
+  const changed = sniper.setAutoBuy(req.body.chain, req.body.enabled)
+  if (changed === false) return res.status(409).json({ error: sniper.executionBlocked[req.body.chain] })
+  res.json({ ok: true })
 })
 
 app.post('/api/sniper/autosell', express.json(), (req, res) => {
@@ -221,11 +224,8 @@ app.post('/api/sniper/strategy', express.json(), (req, res) => {
   const strat = req.body.strategy || 'snipe'
   const chain = req.body.chain || 'sol'
   sniper.setStrategy(strat)
-  // Enable auto-buy + auto-sell for HF strategies
-  if (strat !== 'manual') {
-    sniper.setAutoBuy(chain, true)
-    sniper.setAutoSell(chain, true)
-  } else {
+  // Strategy selection must not silently turn financial execution on.
+  if (strat === 'manual') {
     sniper.setAutoBuy(chain, false)
     sniper.setAutoSell(chain, false)
   }
@@ -236,7 +236,8 @@ app.post('/api/sniper/buy-amount', express.json(), (req, res) => {
   const chain = req.body.chain || 'sol'
   const amount = String(req.body.amount)
   if (!amount || parseFloat(amount) <= 0) return res.status(400).json({ error: 'invalid amount' })
-  sniper.setBuyAmount(chain, amount)
+  const changed = sniper.setBuyAmount(chain, amount)
+  if (changed === false) return res.status(400).json({ error: `amount exceeds safety cap of ${SNIPER_CONFIG[chain].maxBuyAmount}` })
   res.json({ ok: true, chain, amount })
 })
 
@@ -250,37 +251,44 @@ app.get('/api/sniper/detected', (req, res) => { res.json(sniper.getRecentDetecte
 app.get('/api/sniper/buys', (req, res) => { res.json(sniper.getRecentBuys(parseInt(req.query.limit) || 20)) })
 app.get('/api/sniper/positions', (req, res) => { res.json(sniper.getPositions()) })
 
-app.post('/api/sniper/buy', express.json(), (req, res) => {
+app.post('/api/sniper/buy', express.json(), async (req, res) => {
   const { chain, tokenAddress, amount } = req.body
   if (!chain || !tokenAddress) return res.status(400).json({ error: 'missing chain or tokenAddress' })
   if (!amount) return res.status(400).json({ error: 'missing amount' })
   const wallet = sniper.wallets?.[chain]
   if (!wallet) return res.status(400).json({ error: `no wallet set for ${chain}` })
-  // Use gmgn-cli directly for custom amount buys
-  try {
-    const rawAmt = String(Math.floor(parseFloat(amount) * (chain === 'sol' ? 1e9 : 1e18)))
-    const quoteToken = chain === 'sol' ? 'So11111111111111111111111111111111111111112' : '0x0000000000000000000000000000000000000000'
-    const out = execSync(`node "${GMGN_CLI}" swap --chain ${chain} --from ${wallet} --input-token ${quoteToken} --output-token ${tokenAddress} --amount ${rawAmt} --auto-slippage --yes`, { encoding: 'utf-8', timeout: 20000, maxBuffer: 2*1024*1024 }).trim()
-    sniper.emit('log', `[BUY] ${tokenAddress.slice(0, 10)}.. ${amount} ${chain === 'sol' ? 'SOL' : 'ETH'}`)
-    sniper.buys.unshift({ success: true, token: tokenAddress, amount, chain, result: parse(out) || out })
-    sniper.buys = sniper.buys.slice(0, 100)
-    sniper.positions[tokenAddress] = { chain, amount, ts: Date.now() }
-    res.json({ ok: true, result: parse(out) || out })
-  } catch (e) {
-    res.json({ ok: false, error: e.message })
+  const vetted = sniper.detected.some(token => token.chain === chain && token.address === tokenAddress && Date.now() - token.vettedAt < 300000)
+  if (!vetted) return res.status(400).json({ error: 'token is not a vetted sniper candidate' })
+
+  const result = await executeBuy(chain, wallet, tokenAddress, (msg) => sniper.emit('log', msg), amount)
+  sniper.buys.unshift(result)
+  sniper.buys = sniper.buys.slice(0, 100)
+  if (result.authError) {
+    sniper.executionBlocked[chain] = 'AUTH_SIGNATURE_INVALID — private key does not authorize the bound wallet'
+    sniper.setAutoBuy(chain, false)
   }
+  if (result.success) {
+    sniper.positions[tokenAddress] = { chain, amount, ts: Date.now(), highWaterMark: null }
+    sniper.emit('buy-result', result)
+    if (sniper.autoSell[chain]) sniper.watchPosition(chain, tokenAddress)
+  }
+  res.status(result.success ? 200 : 400).json({ ok: result.success, ...result })
 })
 
-app.post('/api/sniper/sell', express.json(), (req, res) => {
-  const { chain, tokenAddress, percent } = req.body
+app.post('/api/sniper/sell', express.json(), async (req, res) => {
+  const { chain, tokenAddress } = req.body
   if (!chain || !tokenAddress) return res.status(400).json({ error: 'missing chain or tokenAddress' })
   const wallet = sniper.wallets?.[chain]
   if (!wallet) return res.status(400).json({ error: `no wallet set for ${chain}` })
-  const result = executeSell(chain, wallet, tokenAddress, (msg) => sniper.emit('log', msg))
-  res.json(result || { ok: false, error: 'sell failed' })
+  const result = await executeSell(chain, wallet, tokenAddress, (msg) => sniper.emit('log', msg))
+  if (result?.success) {
+    delete sniper.positions[tokenAddress]
+    sniper.emit('sell-result', result)
+  }
+  res.status(result?.success ? 200 : 400).json({ ok: Boolean(result?.success), ...(result || { error: 'sell failed' }) })
 })
 
-app.post('/api/sniper/sell-all', express.json(), (req, res) => {
+app.post('/api/sniper/sell-all', express.json(), async (req, res) => {
   const chain = req.body.chain || 'sol'
   const wallet = sniper.wallets?.[chain]
   if (!wallet) return res.status(400).json({ error: `no wallet set for ${chain}` })
@@ -289,8 +297,8 @@ app.post('/api/sniper/sell-all', express.json(), (req, res) => {
   if (tokens.length === 0) return res.json({ ok: true, sold: 0, message: 'no positions' })
   let sold = 0
   for (const addr of tokens) {
-    const r = executeSell(chain, wallet, addr, (msg) => sniper.emit('log', msg))
-    if (r?.success) { sold++; delete sniper.positions[addr] }
+    const r = await executeSell(chain, wallet, addr, (msg) => sniper.emit('log', msg))
+    if (r?.success) { sold++; delete sniper.positions[addr]; sniper.emit('sell-result', r) }
   }
   res.json({ ok: true, sold })
 })

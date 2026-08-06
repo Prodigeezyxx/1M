@@ -1,20 +1,50 @@
-const { execSync } = require('child_process')
 const { CONFIG } = require('./config')
+const { execAsync, errorText, isAuthError } = require('./exec-util')
 
 const chainTimestamps = { sol: [], robinhood: [] }
 
-function gmgnSwap(chain, fromAddress, inputToken, outputToken, amount, percent) {
+async function gmgnSwap(chain, fromAddress, inputToken, outputToken, amount, percent) {
   const chainName = chain === 'sol' ? 'sol' : 'robinhood'
   let cmd = `gmgn-cli swap --chain ${chainName} --from ${fromAddress}`
   if (percent) {
-    cmd += ` --input-token ${inputToken} --percent ${percent}`
+    cmd += ` --input-token ${inputToken} --output-token ${outputToken} --percent ${percent}`
   } else {
     cmd += ` --input-token ${inputToken} --output-token ${outputToken} --amount ${amount}`
   }
   cmd += ` --auto-slippage --yes`
 
-  const raw = execSync(cmd, { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 })
+  const raw = await execAsync(cmd, { timeout: 20000 })
   try { return JSON.parse(raw) } catch { return { raw } }
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+
+async function confirmOrder(chain, result) {
+  if (!result) return { success: false, error: 'empty swap response' }
+  if (result.status === 'confirmed' || result.status === 'successful' || result.state === 30) {
+    return { success: true, order: result }
+  }
+  if (result.status === 'failed' || result.status === 'expired') {
+    return { success: false, error: result.error_status || result.error_code || result.status, order: result }
+  }
+  if (!result.order_id) return { success: false, error: 'swap returned no order id', order: result }
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(3000)
+    try {
+      const raw = await execAsync(`gmgn-cli order get --chain ${chain} --order-id ${result.order_id} --raw`, { timeout: 10000 })
+      const order = JSON.parse(raw.trim())
+      if (order.status === 'confirmed' || order.status === 'successful' || order.state === 30) {
+        return { success: true, order }
+      }
+      if (order.status === 'failed' || order.status === 'expired') {
+        return { success: false, error: order.error_status || order.error_code || order.status, order }
+      }
+    } catch (err) {
+      if (isAuthError(err)) throw err
+    }
+  }
+  return { success: false, error: 'order not confirmed in time', order: result }
 }
 
 function recordTimestamp(chain) {
@@ -37,7 +67,7 @@ function toRawAmount(chain, amountStr) {
   return String(Math.floor(num * decimals))
 }
 
-function executeBuy(chain, walletAddress, tokenAddress, log, amountOverride) {
+async function executeBuy(chain, walletAddress, tokenAddress, log, amountOverride) {
   const cfg = CONFIG[chain]
   const isSol = chain === 'sol'
 
@@ -48,6 +78,11 @@ function executeBuy(chain, walletAddress, tokenAddress, log, amountOverride) {
   }
 
   const userAmount = amountOverride || cfg.buyAmount
+  if (parseFloat(userAmount) > parseFloat(cfg.maxBuyAmount)) {
+    const error = `amount exceeds ${chain} safety cap of ${cfg.maxBuyAmount}`
+    log(`  skip ${tokenAddress.slice(0, 8)} — ${error}`)
+    return { success: false, token: tokenAddress, chain, error }
+  }
   const rawAmount = toRawAmount(chain, userAmount)
   const inputToken = cfg.currency
   const outputToken = tokenAddress
@@ -56,28 +91,42 @@ function executeBuy(chain, walletAddress, tokenAddress, log, amountOverride) {
   log(`  [BUY] ${tokenAddress.slice(0, 10)}..  ${userAmount} ${currencyLabel}  via ${walletAddress.slice(0, 6)}...`)
 
   try {
-    const result = gmgnSwap(chain, walletAddress, inputToken, outputToken, rawAmount)
+    const submitted = await gmgnSwap(chain, walletAddress, inputToken, outputToken, rawAmount)
+    const confirmation = await confirmOrder(chain, submitted)
+    if (!confirmation.success) throw new Error(confirmation.error)
     recordTimestamp(chain)
     log(`  [BOUGHT] ${tokenAddress.slice(0, 10)}..  ${userAmount} ${currencyLabel}`)
-    return { success: true, token: tokenAddress, amount: userAmount, result }
+    return {
+      success: true,
+      token: tokenAddress,
+      chain,
+      amount: userAmount,
+      costNative: rawAmount,
+      result: confirmation.order,
+    }
   } catch (err) {
-    log(`  [FAIL] ${tokenAddress.slice(0, 10)}.. — ${err.message.slice(0, 80)}`)
-    return { success: false, token: tokenAddress, error: err.message }
+    const message = errorText(err).slice(0, 180)
+    log(`  [FAIL] ${tokenAddress.slice(0, 10)}.. — ${message}`)
+    return { success: false, token: tokenAddress, chain, authError: isAuthError(err), error: message }
   }
 }
 
-function executeSell(chain, walletAddress, tokenAddress, log) {
+async function executeSell(chain, walletAddress, tokenAddress, log) {
   const cfg = CONFIG[chain]
   const currencyLabel = chain === 'sol' ? 'SOL' : 'WETH'
 
   log(`  [SELL] ${tokenAddress.slice(0, 10)}..  100% → ${currencyLabel}`)
   try {
-    const result = gmgnSwap(chain, walletAddress, tokenAddress, cfg.currency, null, 100)
+    const submitted = await gmgnSwap(chain, walletAddress, tokenAddress, cfg.currency, null, 100)
+    const confirmation = await confirmOrder(chain, submitted)
+    if (!confirmation.success) throw new Error(confirmation.error)
+    const proceeds = confirmation.order?.report?.output_amount || null
     log(`  [SOLD] ${tokenAddress.slice(0, 10)}..`)
-    return { success: true, token: tokenAddress, result }
+    return { success: true, token: tokenAddress, chain, proceeds, result: confirmation.order }
   } catch (err) {
-    log(`  [SELL FAIL] ${tokenAddress.slice(0, 10)}.. — ${err.message.slice(0, 80)}`)
-    return { success: false, token: tokenAddress, error: err.message }
+    const message = errorText(err).slice(0, 180)
+    log(`  [SELL FAIL] ${tokenAddress.slice(0, 10)}.. — ${message}`)
+    return { success: false, token: tokenAddress, chain, authError: isAuthError(err), error: message }
   }
 }
 

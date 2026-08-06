@@ -13,6 +13,7 @@
     "smartmoney": "gmgn-cli track smartmoney --chain sol --limit 20 --raw"
   },
   "dependencies": {
+    "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
     "ethers": "^6.13.0",
     "express": "^5.2.1"

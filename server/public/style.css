@@ -7,17 +7,17 @@ html, body { height: 100%; overflow: hidden; background: #0c0c0c; color: #00e676
 ::-webkit-scrollbar-thumb { background: #1a3a1a; border-radius: 2px; }
 
 /* ── Top Bar ── */
-#top-bar { display: flex; align-items: center; padding: 3px 12px; background: #050505; border-bottom: 1px solid #1a3a1a; font-size: 12px; flex-shrink: 0; gap: 16px; }
-#top-left { display: flex; align-items: center; gap: 12px; min-width: 140px; }
-#top-center { flex: 1; display: flex; justify-content: center; }
-#top-right { display: flex; align-items: center; gap: 10px; min-width: 140px; justify-content: flex-end; }
+#top-bar { display: flex; align-items: center; padding: 3px 12px; background: #050505; border-bottom: 1px solid #1a3a1a; font-size: 12px; flex-shrink: 0; gap: 10px; min-width: 0; }
+#top-left { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+#top-center { flex: 1; display: flex; justify-content: center; min-width: 0; overflow-x: auto; }
+#top-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; justify-content: flex-end; }
 
 .logo { color: #00e676; font-weight: bold; font-size: 13px; letter-spacing: 1px; }
 .time { color: #666; font-size: 12px; }
 .dim { color: #2a5a2a; }
 
-#tabs { display: flex; gap: 4px; }
-.tab { cursor: pointer; color: #2a5a2a; padding: 2px 8px; border-radius: 2px; font-size: 12px; letter-spacing: 0.5px; transition: all 0.15s; user-select: none; }
+#tabs { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+.tab { cursor: pointer; color: #2a5a2a; padding: 2px 5px; border-radius: 2px; font-size: 11px; letter-spacing: 0.5px; transition: all 0.15s; user-select: none; white-space: nowrap; }
 .tab:hover { color: #00e67666; }
 .tab.active { color: #00e676; font-weight: bold; background: #00e6760d; border-bottom: 2px solid #00e676; }
 
