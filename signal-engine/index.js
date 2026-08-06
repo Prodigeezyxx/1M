@@ -1,14 +1,19 @@
 const { exec } = require('child_process')
 const path = require('path')
+const guard = require('../server/gmgn-guard.js')
 
 const CHAINS = ['sol', 'bsc', 'base', 'eth', 'robinhood']
 const GMGN_CLI = path.join(process.env.APPDATA, 'npm', 'node_modules', 'gmgn-cli', 'dist', 'index.js')
 
 function runAsync(args) {
   return new Promise((resolve) => {
+    if (guard.inCooldown()) return resolve('')
     const cmd = `node "${GMGN_CLI}" ${args.join(' ')} --raw`
-    exec(cmd, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }, (err, stdout) => {
-      if (err) return resolve('')
+    exec(cmd, { encoding: 'utf-8', timeout: 10000, maxBuffer: 2*1024*1024 }, (err, stdout, stderr) => {
+      if (err) {
+        guard.noteError(err, stderr)
+        return resolve('')
+      }
       try { resolve(JSON.parse(stdout.trim())) }
       catch { resolve('') }
     })

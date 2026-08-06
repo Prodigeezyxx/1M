@@ -15,7 +15,7 @@ function q(s) { return s || 'sol' }
 
 const cache = {}
 const inFlight = new Set()
-let gmgnCooldownUntil = 0
+const guard = require('./gmgn-guard.js')
 function getCached(key, ttlMs) {
   const entry = cache[key]
   if (entry && Date.now() - entry.ts < ttlMs) return entry.data
@@ -24,17 +24,13 @@ function getCached(key, ttlMs) {
 function setCache(key, data) { cache[key] = { data, ts: Date.now() } }
 
 function refreshAsync(args, cacheKey) {
-  if (Date.now() < gmgnCooldownUntil || inFlight.has(cacheKey)) return
+  if (guard.inCooldown() || inFlight.has(cacheKey)) return
   inFlight.add(cacheKey)
   const cmd = `node "${GMGN_CLI}" ${args.join(' ')} --raw`
   exec(cmd, { encoding: 'utf-8', timeout: 15000, maxBuffer: 2*1024*1024 }, (err, stdout, stderr) => {
     inFlight.delete(cacheKey)
     if (!err && stdout) setCache(cacheKey, stdout.trim())
-    if (err && /429|RATE_LIMIT/i.test(`${err.message} ${stderr}`)) {
-      const resetMatch = `${stderr}`.match(/resets at (.+?) \(/i)
-      const resetAt = resetMatch ? Date.parse(resetMatch[1]) : NaN
-      gmgnCooldownUntil = Number.isFinite(resetAt) ? resetAt : Date.now() + 60000
-    }
+    guard.noteError(err, stderr)
   })
 }
 
@@ -81,6 +77,9 @@ app.get('/api/signals', async (req, res) => {
   const key = `signals:${c || 'all'}`
   const cached = getCached(key, TTL.signals)
   if (cached) return res.json(cached)
+  const stale = cache[key]?.data
+  if (stale) return res.json(stale)
+  if (guard.inCooldown()) return res.json([])
   try {
     const sigs = await getSignals(c)
     if (sigs) setCache(key, sigs)
@@ -138,16 +137,17 @@ app.get('/api/portfolio/stats', (req, res) => {
 
 app.get('/api/portfolio/balance', (req, res) => {
   const c = q(req.query.chain)
-  try {
-    const out = execSync(`node "${GMGN_CLI}" portfolio info --raw`, { encoding: 'utf-8', timeout: 10000 }).trim()
-    const data = parse(out)
-    const wallets = data?.wallets || []
+  const key = `balance:${c}`
+  const data = fetchOrRefresh(['portfolio', 'info'], key, 60000, out => {
+    const parsed = parse(out)
+    const wallets = parsed?.wallets || []
     const chainWallet = wallets.find(w => w.chain === c)
     const balances = chainWallet?.balances || []
     const native = balances.find(b => b.symbol === (c === 'sol' ? 'SOL' : 'ETH'))
     const bal = parseFloat(native?.balance || 0)
-    res.json({ balance: bal, symbol: c === 'sol' ? 'SOL' : 'ETH', wallet: chainWallet?.address || '', raw: balances })
-  } catch { res.json({ balance: 0, symbol: c === 'sol' ? 'SOL' : 'ETH', wallet: '', raw: [] }) }
+    return { balance: bal, symbol: c === 'sol' ? 'SOL' : 'ETH', wallet: chainWallet?.address || '', raw: balances }
+  }, { balance: 0, symbol: c === 'sol' ? 'SOL' : 'ETH', wallet: '', raw: [] })
+  res.json(data)
 })
 
 app.get('/api/config/check', (req, res) => {
@@ -344,10 +344,10 @@ sniper.on('sell-result', (result) => {
 
 app.listen(PORT, () => {
   console.log(`GMGN Terminal Web → http://localhost:${PORT}`)
-  // Pre-warm signals cache asynchronously
+  // Pre-warm signals cache asynchronously (skips during GMGN cooldown)
   setTimeout(() => {
     const key = 'signals:sol'
-    if (!getCached(key, 60000)) {
+    if (!getCached(key, 60000) && !guard.inCooldown()) {
       getSignals('sol').then(sigs => { if (sigs) setCache(key, sigs) }).catch(() => {})
     }
   }, 5000)
